@@ -732,17 +732,17 @@ fn the_enter_that_brings_a_dialog_up_does_not_answer_it() {
     t.frame_with(vec![key(egui::Key::Enter)]);
     assert_eq!(t.titles(), ["B"], "the next Enter is an answer");
 
-    // The same for a list: here the first row would be the system's folder dialog.
+    // The same for a list: here the first row would be the system's folder
+    // dialog, where there is one (on Linux there is not, nor any other row).
     t.0.picker = Some(picker::Picker::new(picker::Kind::Vaults));
     t.frame_with(vec![key(egui::Key::Enter)]);
     assert!(t.0.picker.is_some() && !t.0.browse, "the list is up, and nothing in it taken");
-    t.frame_with(vec![key(egui::Key::Enter)]);
-    if cfg!(any(windows, target_os = "macos")) {
-        assert!(t.0.picker.is_none() && t.0.browse, "now it is, and the dialog is asked for");
-        assert_eq!(t.0.vault.root(), t.0.recent[0], "which only the real window ever shows");
-    } else {
-        assert!(t.0.picker.is_some() && !t.0.browse, "there is no folder dialog here, so Enter has nothing to take");
+    if !picker::CAN_BROWSE {
+        return;
     }
+    t.frame_with(vec![key(egui::Key::Enter)]);
+    assert!(t.0.picker.is_none() && t.0.browse, "now it is, and the dialog is asked for");
+    assert_eq!(t.0.vault.root(), t.0.recent[0], "which only the real window ever shows");
 }
 
 #[test]
@@ -2946,9 +2946,10 @@ fn a_theme_chosen_in_the_dialog_is_the_colour_of_everything() {
     let card = t.spot("Aperture");
     t.click(card);
     assert_eq!(t.0.theme(&t.1).accent, egui::Color32::RED);
-    let _ = t.spot("Use the theme's");
-    t.0.set_option(appearance::colors(true), "accent", "#ff9a1f", "#ff9a1f");
+    let theirs = t.spot("Use the theme's");
+    t.click(theirs);
     assert_eq!(t.0.theme(&t.1).accent, color(Palette::Aperture, ACCENT));
+    assert!(fs::read_to_string(&conf).unwrap().contains("\n# accent = #ff9a1f\n"));
     assert!(!t.0.failed());
 }
 
@@ -3058,7 +3059,6 @@ impl TempApp {
     /// The middle of one of the buttons that are pictures, by what it is for.
     fn spot(&mut self, name: &str) -> egui::Pos2 {
         self.0.spots.clear();
-        self.frame();
         self.frame();
         self.0.spots.get(name).unwrap_or_else(|| panic!("no '{name}' button was drawn")).center()
     }

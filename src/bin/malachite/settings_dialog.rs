@@ -445,12 +445,15 @@ impl App {
                     many => format!("{} colours are", many.len()),
                 };
                 ui.label(RichText::new(format!("{which} set to a colour of your own, in this theme and any other.")).small().weak());
+                // Whole, on the next line if it does not fit on this one:
+                // a link broken over two lines reads as two.
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 let theirs = ui.link(RichText::new("Use the theme's").small());
                 #[cfg(test)]
                 self.spots.insert("Use the theme's", theirs.rect);
                 if theirs.on_hover_text("Put every colour of this scheme back to the theme's own").clicked() {
                     for index in own {
-                        let default = hex(look.palette.colors(dark)[index]);
+                        let default = hex(look.themed(dark, index));
                         self.set_option(colors(dark), PAINTS[index].key, &default, &default);
                     }
                 }

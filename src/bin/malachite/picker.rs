@@ -251,7 +251,7 @@ pub(crate) fn vault_name(root: &Path) -> String {
 }
 
 /// Whether there is a system dialog to pick a folder in (see `Cargo.toml`).
-const CAN_BROWSE: bool = cfg!(any(windows, target_os = "macos"));
+pub(crate) const CAN_BROWSE: bool = cfg!(any(windows, target_os = "macos"));
 
 /// Ask for a folder with the system's dialog, which starts beside the vault
 /// in `near`. `None` if the dialog was cancelled.

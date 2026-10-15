@@ -243,15 +243,14 @@ impl Files {
 
 /// A folder as the file writes it: from the top of the vault, with `/`
 /// between its parts. Nothing at all is the top.
+///
+/// No part of it may have a `:` in it. Windows has no such names, and to
+/// it `C:/Notes` is a whole other drive: elsewhere it would be a folder
+/// `C:` in the vault, and a vault is to mean the same on every system.
 pub fn folder(written: &str) -> Result<PathBuf, String> {
-    let path = written.trim().replace('\\', "/");
-    let outside = path
-        .chars()
-        .nth(1)
-        .is_some_and(|second| second == ':')
-        && path.chars().next().is_some_and(|first| first.is_ascii_alphabetic());
-    let path = PathBuf::from(path.trim_matches('/'));
-    let inside = !outside && path.components().all(|part| matches!(part, Component::Normal(name) if !name.to_string_lossy().starts_with('.')));
+    let path = PathBuf::from(written.trim().replace('\\', "/").trim_matches('/'));
+    let allowed = |name: &str| !name.starts_with('.') && !name.contains(':');
+    let inside = path.components().all(|part| matches!(part, Component::Normal(name) if allowed(&name.to_string_lossy())));
     match inside {
         true => Ok(path),
         false => Err(format!("`{}` is not a folder inside the vault", written.trim())),
