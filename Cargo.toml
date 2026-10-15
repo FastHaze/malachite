@@ -1,0 +1,52 @@
+[package]
+# The app is Malachite; the package has a longer name because `malachite` on
+# crates.io is another project. The library and the programs keep the short one.
+name = "malachite-notes"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "A fast, local notes app for a vault of Markdown files, with live preview and a 3D graph of the links between notes"
+license = "MIT"
+repository = "https://github.com/FastHaze/malachite"
+readme = "README.md"
+keywords = ["notes", "markdown", "wikilinks", "egui", "knowledge-base"]
+categories = ["text-editors", "gui"]
+exclude = ["/malachite.exe", "/vault/.trash", "/vault/.malachite", "/.github"]
+
+[lib]
+name = "malachite"
+
+# Versions are held back to ones that build on Rust 1.83. Cargo.lock also pins
+# image, idna_adapter, webbrowser, home and unicode-segmentation for the same
+# reason, and on Linux jobserver, smithay-clipboard and wayland-protocols, so
+# avoid a blanket `cargo update` until the toolchain is newer.
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "=4.5.20", features = ["derive"] }
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
+# Decodes the images a note embeds. The version is the one eframe already
+# brings in, so this adds formats to it and no second copy of the crate.
+image = { version = "=0.25.5", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
+
+# The system's "choose a folder" dialog, for opening another vault. Only where
+# it needs no extra back end: on Linux it would want GTK or an async runtime,
+# and there a vault is opened by typing its path instead.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+rfd = { version = "=0.15.4", default-features = false }
+
+# Names the window to Windows, to ask it for the round corners of its other
+# windows (see `window.rs`). The version is the one eframe already brings in.
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+
+# On Linux a window needs a display server to be shown on, and eframe's
+# default features, left out above, are what name them.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.31", default-features = false, features = ["x11", "wayland"] }
+
+# eframe is built from a copy in `vendor/eframe`, changed so that a frame that
+# would draw what the window already shows is not drawn (see
+# `vendor/README.md`). The copy is of the version above: keep the two in step.
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }

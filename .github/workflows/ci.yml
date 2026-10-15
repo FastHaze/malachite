@@ -1,0 +1,32 @@
+# Builds and tests Malachite on every system it is released for, on each push
+# and pull request. The interface tests need no window, so they run here too.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The oldest Rust the dependencies are held back for (Cargo.toml).
+  RUST_VERSION: "1.83.0"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked --bins
+      - name: Test
+        run: cargo test --locked
