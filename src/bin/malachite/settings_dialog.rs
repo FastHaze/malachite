@@ -450,7 +450,7 @@ impl App {
                 self.spots.insert("Use the theme's", theirs.rect);
                 if theirs.on_hover_text("Put every colour of this scheme back to the theme's own").clicked() {
                     for index in own {
-                        let default = hex(look.themed(dark, index));
+                        let default = hex(look.palette.colors(dark)[index]);
                         self.set_option(colors(dark), PAINTS[index].key, &default, &default);
                     }
                 }

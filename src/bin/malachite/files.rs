@@ -244,8 +244,14 @@ impl Files {
 /// A folder as the file writes it: from the top of the vault, with `/`
 /// between its parts. Nothing at all is the top.
 pub fn folder(written: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(written.trim().replace('\\', "/").trim_matches('/'));
-    let inside = path.components().all(|part| matches!(part, Component::Normal(name) if !name.to_string_lossy().starts_with('.')));
+    let path = written.trim().replace('\\', "/");
+    let outside = path
+        .chars()
+        .nth(1)
+        .is_some_and(|second| second == ':')
+        && path.chars().next().is_some_and(|first| first.is_ascii_alphabetic());
+    let path = PathBuf::from(path.trim_matches('/'));
+    let inside = !outside && path.components().all(|part| matches!(part, Component::Normal(name) if !name.to_string_lossy().starts_with('.')));
     match inside {
         true => Ok(path),
         false => Err(format!("`{}` is not a folder inside the vault", written.trim())),
