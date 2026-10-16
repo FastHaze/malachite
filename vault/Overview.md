@@ -169,11 +169,14 @@ Tables are drawn as a grid in Read; while editing they stay as typed.
 
 ## Around the note
 
-- The three pictures at the top left are the tools of the list: a page with a plus for a new note, a folder with a plus for a new folder, a calendar for today's note
+- The four pictures at the top left are the tools of the list: a page with a plus for a new note, a folder with a plus for a new folder, a calendar for today's note, and two chevrons that fold every folder away
 - The page with a plus, or Ctrl+N — a new note with its name selected: type a name, press Enter, start writing. It starts beside the open note, unless the settings say the top of the vault or a folder of your choosing. The folder with a plus makes a folder beside the open note, named the same way
 - Ctrl+P — the command palette: type a few letters of what you want done, press Enter. Everything with a key below is in it, and so is much that has none
 - Ctrl+O — the quick switcher: type part of a note's name and press Enter to open it. A name that matches nothing makes a new note
 - In the list on the left every row starts with a picture of what it is: a folder (filled in while it is open), a page for a note, a calendar for a daily note
+- Click a folder in the list to fold it away, and again to open it. The chevrons at the top left fold every folder at once, the folders inside others too; once the list shows only folded folders they point apart, and open them all again. "Collapse all folders" and "Expand all folders" in the command palette do the same, and "Collapse others" in a folder's right-click menu folds every folder but that one and those it is in. Each vault remembers which of its folders are folded, from one run of the app to the next
+- The number at the right of a folder is how many notes are in it, counting the folders inside it
+- Drag a note or a folder onto a folder to move it there; onto a note, to go beside it; below the list, to the top level. Links are by name, so they all still work. A note's right-click menu also has "Move to"
 - The arrows at the top left, or Ctrl+Alt+Left and Ctrl+Alt+Right — back to the note you were in before, and forward again
 - The calendar at the top left — today's daily note, ready to type in. "Open previous daily note" and "Open next daily note" in the command palette go to the daily notes either side of the one that is open. The settings choose the folder a new one goes in, how its name is written (`YYYY-MM-DD` to begin with) and a template it starts as
 - The name at the top of the note renames it and updates the links that point to it; F2 jumps to it, Esc backs out. The settings can have it ask first, or leave the links as they are

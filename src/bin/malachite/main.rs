@@ -184,7 +184,13 @@ enum Action {
     NewFolder(PathBuf),
     RenameFolder(PathBuf, String),
     TrashFolder(PathBuf),
+    /// Fold every folder in the list away, or with `false` unfold them all.
+    FoldFolders(bool),
+    /// Fold every folder away but this one and the folders it is in.
+    FoldOthers(PathBuf),
     Move { note: PathBuf, folder: PathBuf },
+    /// Move a folder and everything in it into another, or to the top level.
+    MoveFolder { folder: PathBuf, into: PathBuf },
     Filter(String),
     /// Put the keyboard in the note, once the actions before this have run.
     FocusEditor,
@@ -242,6 +248,10 @@ struct App {
     rows: Vec<Row>,
     /// Folders whose contents are folded away in the list.
     collapsed: HashSet<PathBuf>,
+    /// The folders left folded in the other remembered vaults, by vault, as
+    /// the settings file has them: kept to be written back, and taken up when
+    /// one of those vaults is opened again.
+    folded_elsewhere: HashMap<String, Vec<String>>,
     /// The folder whose name is being typed in the list, and the name so far.
     renaming: Option<(PathBuf, String)>,
     /// Title of the note in the editor.
@@ -432,6 +442,7 @@ impl App {
             folders: Vec::new(),
             rows: Vec::new(),
             collapsed: HashSet::new(),
+            folded_elsewhere: saved.folded.clone(),
             renaming: None,
             open: None,
             open_path: None,
@@ -532,6 +543,8 @@ impl App {
         if let Some(index) = last.or((!app.notes.is_empty()).then_some(0)) {
             app.show_note(index);
         }
+        // The list as it was left, even if that hides the note just opened.
+        app.take_up_folded();
         // Only what changes from here on is worth writing to the settings file.
         app.saved = app.settings();
         Ok(app)
@@ -543,6 +556,9 @@ impl App {
         self.recent.retain(|vault| *vault != root);
         self.recent.insert(0, root);
         self.recent.truncate(settings::RECENT_VAULTS);
+        // What was folded in a vault no longer remembered is forgotten with it.
+        let recent = &self.recent;
+        self.folded_elsewhere.retain(|vault, _| recent.iter().any(|kept| kept.to_string_lossy() == vault.as_str()));
     }
 
     /// Leave this vault for the one in the folder `root`, which is made if
@@ -566,6 +582,12 @@ impl App {
         self.vault_conf = settings_dialog::ConfFile::load(settings_dialog::Whose::Vault, Some(files::vault_file(&root)));
         self.read_conf();
         self.close_note();
+        // Its folded folders are remembered with the others, for coming back to.
+        let left = self.vault.root().to_string_lossy().into_owned();
+        match self.folded_here() {
+            folded if folded.is_empty() => self.folded_elsewhere.remove(&left),
+            folded => self.folded_elsewhere.insert(left, folded),
+        };
         (self.vault, self.notes, self.folders, self.rows) = (vault, notes, folders, rows);
         self.version += 1;
         self.scanned += 1;
@@ -574,7 +596,6 @@ impl App {
         self.folds.clear();
         self.pictures.clear();
         self.embed_heights.clear();
-        self.collapsed.clear();
         self.back.clear();
         self.forward.clear();
         self.filter.clear();
@@ -584,6 +605,7 @@ impl App {
         if !self.notes.is_empty() {
             self.show_note(0);
         }
+        self.take_up_folded();
         self.info(format!("Opened the vault in {}", root.display()));
         Ok(())
     }
@@ -954,6 +976,7 @@ impl App {
             vault: root.to_string_lossy().into_owned(),
             note: note.map(folders::display).unwrap_or_default(),
             recent: self.recent.iter().map(|vault| vault.to_string_lossy().into_owned()).collect(),
+            folded: self.folded_to_remember(),
             highlight: self.highlight,
         }
     }
@@ -1038,7 +1061,16 @@ impl App {
             Action::NewFolder(parent) => self.new_folder(&parent),
             Action::RenameFolder(folder, name) => self.rename_folder(&folder, &name),
             Action::TrashFolder(folder) => self.trash_folder(&folder),
+            Action::FoldFolders(fold) => {
+                self.fold_folders(fold);
+                Ok(())
+            }
+            Action::FoldOthers(folder) => {
+                self.fold_others(&folder);
+                Ok(())
+            }
             Action::Move { note, folder } => self.move_note(&note, &folder),
+            Action::MoveFolder { folder, into } => self.move_folder(&folder, &into),
             Action::Filter(query) => {
                 self.filter = query;
                 // The filter acts on the note list, so it has to be in view.

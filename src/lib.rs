@@ -270,6 +270,28 @@ impl Vault {
     }
 
     /// Move `folder` (relative to the root) and everything in it into the
+    /// folder `into`, the empty path being the top level. Links are by title,
+    /// so none need rewriting. Returns its new path relative to the root.
+    pub fn move_folder(&self, folder: &Path, into: &Path) -> Result<PathBuf> {
+        let name = folder.file_name().context("the top level of the vault cannot be moved")?;
+        let from = self.dir(folder)?;
+        let dir = self.dir(into)?;
+        let moved = into.join(name);
+        if moved == folder {
+            return Ok(moved);
+        }
+        if into.starts_with(folder) {
+            bail!("a folder cannot be moved into itself");
+        }
+        if dir.join(name).exists() {
+            bail!("there is already something called '{}' there", name.to_string_lossy());
+        }
+        fs::create_dir_all(&dir)?;
+        fs::rename(from, dir.join(name))?;
+        Ok(moved)
+    }
+
+    /// Move `folder` (relative to the root) and everything in it into the
     /// vault's `.trash` folder. Returns where it went.
     pub fn trash_folder(&self, folder: &Path) -> Result<PathBuf> {
         let name = folder.file_name().context("the top level of the vault cannot be deleted")?.to_string_lossy();
@@ -927,6 +949,31 @@ mod tests {
         assert!(titles(&v.0).is_empty());
         assert_eq!(fs::read_to_string(gone.join("In- side-").join("Deep.md")).unwrap(), "d", "its notes go with it");
         assert!(v.0.trash_folder(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn a_folder_moves_with_everything_in_it_and_never_onto_another() {
+        let v = TempVault::new("move-folder");
+        v.0.create_in(Path::new("Projects/2026"), Some("Goals"), "see [[Plan]]", &[]).unwrap();
+        v.0.create_in(Path::new("Archive"), Some("Plan"), "p", &[]).unwrap();
+        let moved = v.0.move_folder(Path::new("Projects"), Path::new("Archive")).unwrap();
+        assert_eq!(moved, Path::new("Archive/Projects"));
+        assert_eq!(folders(&v.0), ["Archive", "Archive/Projects", "Archive/Projects/2026"]);
+        assert_eq!(v.0.find("Goals").unwrap().content, "see [[Plan]]", "links are by title, so still right");
+        // Where it already is changes nothing; back to the top level works.
+        assert_eq!(v.0.move_folder(&moved, Path::new("Archive")).unwrap(), moved);
+        assert_eq!(v.0.move_folder(&moved, Path::new("")).unwrap(), Path::new("Projects"));
+
+        // Not into itself, nor into a folder inside it, nor onto a namesake.
+        assert!(v.0.move_folder(Path::new("Projects"), Path::new("Projects")).is_err());
+        assert!(v.0.move_folder(Path::new("Projects"), Path::new("Projects/2026")).is_err());
+        v.0.create_folder(Path::new("Archive"), "Projects").unwrap();
+        assert!(v.0.move_folder(Path::new("Projects"), Path::new("Archive")).is_err());
+        assert_eq!(v.0.folder_of(&v.0.find("Goals").unwrap().path), Path::new("Projects/2026"));
+        for outside in ["..", "../elsewhere", ".trash", "Archive/.hidden"] {
+            assert!(v.0.move_folder(Path::new("Projects"), Path::new(outside)).is_err(), "{outside}");
+        }
+        assert!(v.0.move_folder(Path::new(""), Path::new("Archive")).is_err(), "the top level stays where it is");
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! What the app remembers between runs: the zoom level, which side panels
-//! are showing, the editing mode, and the vaults that have been open. A few
-//! `key = value` lines in a text file in the user's settings folder; a
-//! missing or damaged file just means the defaults.
+//! are showing, the editing mode, and the vaults that have been open, with
+//! the folders left folded in each. A few `key = value` lines in a text file
+//! in the user's settings folder; a missing or damaged file just means the
+//! defaults.
 
+use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +30,10 @@ pub struct Settings {
     pub note: String,
     /// The vaults that have been open, the latest first: one `recent` line each.
     pub recent: Vec<String>,
+    /// The folders left folded in the note list of each of those vaults, by
+    /// the vault, with `/` between folders: `folded` lines under the vault's
+    /// `recent` line. A vault with none has no entry.
+    pub folded: HashMap<String, Vec<String>>,
     /// The colour last picked for a highlight of one's own, as red, green
     /// and blue; written as six hex digits.
     pub highlight: [u8; 3],
@@ -53,6 +59,7 @@ impl Default for Settings {
             vault: String::new(),
             note: String::new(),
             recent: Vec::new(),
+            folded: HashMap::new(),
             highlight: HIGHLIGHT,
         }
     }
@@ -61,6 +68,9 @@ impl Default for Settings {
 impl Settings {
     pub fn parse(text: &str) -> Self {
         let mut settings = Self::default();
+        // The vault of the last `recent` line, which the `folded` lines after
+        // it are about; none before the first, or after one not kept.
+        let mut vault: Option<String> = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else { continue };
             let value = value.trim();
@@ -72,7 +82,16 @@ impl Settings {
                 "vault" => settings.vault = value.to_owned(),
                 "note" => settings.note = value.to_owned(),
                 "highlight" => settings.highlight = color(value).unwrap_or(settings.highlight),
-                "recent" if !value.is_empty() && settings.recent.len() < RECENT_VAULTS => settings.recent.push(value.to_owned()),
+                "recent" => {
+                    let kept = !value.is_empty() && settings.recent.len() < RECENT_VAULTS;
+                    vault = kept.then(|| value.to_owned());
+                    settings.recent.extend(vault.clone());
+                }
+                "folded" if !value.is_empty() => {
+                    if let Some(vault) = &vault {
+                        settings.folded.entry(vault.clone()).or_default().push(value.to_owned());
+                    }
+                }
                 _ => {}
             }
         }
@@ -88,6 +107,9 @@ impl Settings {
         text.push_str(&format!("highlight = {r:02x}{g:02x}{b:02x}\n"));
         for vault in &self.recent {
             text.push_str(&format!("recent = {vault}\n"));
+            for folder in self.folded.get(vault).into_iter().flatten() {
+                text.push_str(&format!("folded = {folder}\n"));
+            }
         }
         text
     }
@@ -202,10 +224,24 @@ theme = light
             vault: r"C:\Users\me\My notes = here".into(),
             note: "Projects/2026/Plan = draft.md".into(),
             recent: vec![r"C:\Users\me\My notes = here".into(), r"D:\Work".into()],
+            folded: HashMap::from([(r"D:\Work".to_owned(), vec!["Archive".to_owned(), "Projects/2026 = done".to_owned()])]),
             highlight: [1, 171, 255],
         };
         assert_eq!(Settings::parse(&settings.write()), settings);
         assert_eq!(Settings::parse(&Settings::default().write()), Settings::default());
+    }
+
+    #[test]
+    fn folded_folders_belong_to_the_vault_listed_above_them() {
+        let text = "folded = Stray\nrecent = A\nfolded = X\nfolded = Y/Z\nzoom = 1.2\nfolded = W\nrecent = B\nrecent = C\nfolded = V\n";
+        let folded = Settings::parse(text).folded;
+        assert_eq!(folded, HashMap::from([("A".into(), vec!["X".into(), "Y/Z".into(), "W".into()]), ("C".into(), vec!["V".into()])]));
+
+        // Those of a vault that is not remembered go with it.
+        let lines: String = (0..RECENT_VAULTS + 1).map(|n| format!("recent = vault {n}\nfolded = F\n")).collect();
+        let folded = Settings::parse(&lines).folded;
+        assert_eq!(folded.len(), RECENT_VAULTS);
+        assert!(!folded.contains_key(&format!("vault {RECENT_VAULTS}")));
     }
 
     #[test]

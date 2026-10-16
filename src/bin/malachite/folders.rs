@@ -13,7 +13,8 @@ use crate::{gone, natural_cmp, App, Focus};
 
 /// One line of the note list.
 pub(crate) enum Row {
-    Folder { path: PathBuf, depth: usize },
+    /// A folder, and how many notes are in it, counting the folders inside it.
+    Folder { path: PathBuf, depth: usize, notes: usize },
     /// The note `notes[index]`.
     Note { index: usize, depth: usize },
 }
@@ -45,20 +46,29 @@ struct Tree<'a> {
 }
 
 impl Tree<'_> {
-    /// Add what is in `folder`, whose own contents sit at `depth`.
-    fn add(&mut self, folder: &Path, depth: usize) {
+    /// Add what is in `folder`, whose own contents sit at `depth`, and say
+    /// how many notes that was.
+    fn add(&mut self, folder: &Path, depth: usize) -> usize {
         let mut inside: Vec<&PathBuf> = self.folders.iter().filter(|f| f.parent() == Some(folder)).collect();
         inside.sort_by(|a, b| natural_cmp(&name(a), &name(b)));
+        let mut count = 0;
         for child in inside {
-            self.rows.push(Row::Folder { path: child.clone(), depth });
-            self.add(child, depth + 1);
+            let row = self.rows.len();
+            self.rows.push(Row::Folder { path: child.clone(), depth, notes: 0 });
+            let added = self.add(child, depth + 1);
+            if let Row::Folder { notes, .. } = &mut self.rows[row] {
+                *notes = added;
+            }
+            count += added;
         }
         let mut notes = self.by_folder.remove(folder).unwrap_or_default();
         notes.sort_by(|a, b| natural_cmp(&a.title, &b.title));
+        count += notes.len();
         for note in notes {
             self.rows.push(Row::Note { index: self.notes.len(), depth });
             self.notes.push(note);
         }
+        count
     }
 }
 
@@ -98,6 +108,57 @@ impl App {
         for ancestor in folder.ancestors() {
             self.collapsed.remove(ancestor);
         }
+    }
+
+    /// Fold every folder in the list away, those inside others too, so that
+    /// unfolding one shows its folders still folded; or unfold them all.
+    pub(crate) fn fold_folders(&mut self, fold: bool) {
+        match fold {
+            true => self.collapsed = self.folders.iter().cloned().collect(),
+            false => self.collapsed.clear(),
+        }
+        // A command can ask for this with the list put away: it is what shows it.
+        self.show_list = true;
+    }
+
+    /// Fold every folder away but `folder` and the folders it is in, so that
+    /// the list shows what is in it and little else. The folders inside it
+    /// are folded too, as they are by folding everything.
+    pub(crate) fn fold_others(&mut self, folder: &Path) {
+        self.collapsed = self.folders.iter().filter(|other| !folder.starts_with(other)).cloned().collect();
+    }
+
+    /// The folders folded in this vault, as the settings file keeps them:
+    /// with `/` between folders, in order.
+    pub(crate) fn folded_here(&self) -> Vec<String> {
+        let mut folded: Vec<String> = self.collapsed.iter().map(|folder| display(folder)).collect();
+        folded.sort();
+        folded
+    }
+
+    /// The folders left folded in each remembered vault, for the settings file.
+    pub(crate) fn folded_to_remember(&self) -> HashMap<String, Vec<String>> {
+        let here = self.vault.root();
+        let folded = self.recent.iter().filter_map(|vault| {
+            let folders = if vault == here { self.folded_here() } else { self.folded_elsewhere.get(&*vault.to_string_lossy())?.clone() };
+            (!folders.is_empty()).then(|| (vault.to_string_lossy().into_owned(), folders))
+        });
+        folded.collect()
+    }
+
+    /// Fold the folders that were left folded the last time this vault was
+    /// open, those that are still there.
+    pub(crate) fn take_up_folded(&mut self) {
+        let left = self.folded_elsewhere.remove(&*self.vault.root().to_string_lossy()).unwrap_or_default();
+        let folders = left.iter().map(|folder| folder.split('/').collect::<PathBuf>());
+        self.collapsed = folders.filter(|folder| self.folders.contains(folder)).collect();
+    }
+
+    /// Whether there are folders and the list shows each of them folded. One
+    /// inside a folded folder is out of sight, so folded or not it does not count.
+    pub(crate) fn all_folded(&self) -> bool {
+        let showing_open = |folder: &PathBuf| folder.ancestors().all(|f| !self.collapsed.contains(f));
+        !self.folders.is_empty() && !self.folders.iter().any(showing_open)
     }
 
     /// Move the note in the file `note` into `folder`.
@@ -153,20 +214,48 @@ impl App {
             bail!("could not save the open note before renaming the folder");
         }
         let renamed = self.vault.rename_folder(folder, new_name)?;
+        self.follow_folder(folder, &renamed);
+        self.reload()?;
+        self.info(format!("Renamed the folder to {}", name(&renamed)));
+        Ok(())
+    }
+
+    /// Move `folder` and everything in it into the folder `into`.
+    pub(crate) fn move_folder(&mut self, folder: &Path, into: &Path) -> Result<()> {
+        if folder.parent() == Some(into) || folder == into {
+            // Dropped where it already was, or on itself.
+            return Ok(());
+        }
+        // The open note may be in there, and its file is about to move.
+        self.save();
+        if self.dirty {
+            bail!("could not save the open note before moving the folder");
+        }
+        let moved = self.vault.move_folder(folder, into)?;
+        self.follow_folder(folder, &moved);
+        self.reload()?;
+        self.unfold(into);
+        self.info(match into.as_os_str().is_empty() {
+            true => format!("Moved the folder {} to the top level", name(folder)),
+            false => format!("Moved the folder {} into {}", name(folder), display(into)),
+        });
+        Ok(())
+    }
+
+    /// Keep up with a folder that has been renamed or moved from `from` to
+    /// `to`: the open note may have been in it, and folders folded away
+    /// inside it stay folded.
+    fn follow_folder(&mut self, from: &Path, to: &Path) {
         let moved = |path: &Path, from: &Path, to: &Path| match path.strip_prefix(from) {
             Ok(rest) if rest.as_os_str().is_empty() => Some(to.to_path_buf()),
             Ok(rest) => Some(to.join(rest)),
             Err(_) => None,
         };
         let root = self.vault.root();
-        if let Some(open) = self.open_path.as_deref().and_then(|p| moved(p, &root.join(folder), &root.join(&renamed))) {
+        if let Some(open) = self.open_path.as_deref().and_then(|p| moved(p, &root.join(from), &root.join(to))) {
             self.open_path = Some(open);
         }
-        // Folders folded away inside it stay folded.
-        self.collapsed = self.collapsed.drain().map(|f| moved(&f, folder, &renamed).unwrap_or(f)).collect();
-        self.reload()?;
-        self.info(format!("Renamed the folder to {}", name(&renamed)));
-        Ok(())
+        self.collapsed = self.collapsed.drain().map(|f| moved(&f, from, to).unwrap_or(f)).collect();
     }
 
     /// Delete `folder` and everything in it, in the way the settings say.

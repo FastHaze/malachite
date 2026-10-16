@@ -111,6 +111,14 @@ pub(crate) const COMMANDS: &[Command] = &[
     }),
     app("file-explorer:new-file", "Create new note", on(CTRL, Key::N), |app| app.create_in(&app.current_folder(), None)),
     app("file-explorer:new-folder", "Create new folder", None, |app| app.new_folder(&app.current_folder())),
+    app("file-explorer:collapse-all", "Collapse all folders", None, |app| {
+        app.fold_folders(true);
+        Ok(())
+    }),
+    app("file-explorer:expand-all", "Expand all folders", None, |app| {
+        app.fold_folders(false);
+        Ok(())
+    }),
     app("daily-notes", "Open today's daily note", None, App::daily),
     app("daily-notes:goto-prev", "Open previous daily note", None, |app| app.daily_step(false)),
     app("daily-notes:goto-next", "Open next daily note", None, |app| app.daily_step(true)),

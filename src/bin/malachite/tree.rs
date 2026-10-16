@@ -2,12 +2,14 @@
 //!
 //! Notes are moved by dragging them onto a folder (or onto a note in it, or
 //! below the list for the top level), or from the menu a right click gives.
+//! Folders are moved by dragging them in the same way.
 //!
 //! Every row starts with a small picture of what it is: a folder, open or
 //! shut, a note, or a calendar page for a daily note. They are drawn with
 //! the painter, a few strokes each, so they need no icon font and take the
 //! colour of the row's text. The tools above the list are the same pictures,
-//! as buttons (`tool`).
+//! as buttons (`tool`), and one of their own: a pair of chevrons that folds
+//! every folder away, or unfolds them all once the list shows them all folded.
 
 use std::ops::Range;
 use std::path::PathBuf;
@@ -24,6 +26,30 @@ use crate::{Action, App, Confirm, Focus};
 
 /// How many of the lines found in a note are listed under it.
 const LINES_SHOWN: usize = 5;
+
+/// What is being dragged in the list: a note, by its file, or a folder.
+#[derive(Clone)]
+enum Dragged {
+    Note(PathBuf),
+    Folder(PathBuf),
+}
+
+impl Dragged {
+    /// What letting go of it over `folder`, or over a note in it, asks for.
+    fn drop_in(&self, folder: PathBuf) -> Action {
+        match self {
+            Dragged::Note(note) => Action::Move { note: note.clone(), folder },
+            Dragged::Folder(moved) => Action::MoveFolder { folder: moved.clone(), into: folder },
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Dragged::Note(note) => note.file_stem().unwrap_or_default().to_string_lossy().into_owned(),
+            Dragged::Folder(folder) => name(folder),
+        }
+    }
+}
 
 /// What the search in the box above the list found, kept for as long as
 /// neither what is searched for nor the notes change.
@@ -56,6 +82,9 @@ pub(crate) enum Icon {
     Note,
     /// A note for a day: `2026-10-13`.
     Daily,
+    /// Not a row's: the tool that folds every folder away, or with `fold`
+    /// false unfolds them all.
+    FoldAll { fold: bool },
 }
 
 impl Icon {
@@ -92,7 +121,7 @@ impl App {
                 folded = None;
 
                 match row {
-                    Row::Folder { path, depth } => {
+                    Row::Folder { path, depth, notes } => {
                         let collapsed = self.collapsed.contains(path);
                         if collapsed {
                             folded = Some(*depth);
@@ -121,7 +150,7 @@ impl App {
 
                         let label = name(path);
                         let icon = Some(Icon::Folder { open: !collapsed });
-                        let look = Look { depth: *depth, label: &label, detail: None, selected: false, quiet: false, folder: Some(!collapsed), icon };
+                        let look = Look { depth: *depth, label: &label, detail: None, count: Some(*notes), selected: false, quiet: false, folder: Some(!collapsed), icon };
                         let line = tree_row(ui, look);
                         #[cfg(test)]
                         self.list_rows.push((label.clone(), line.rect));
@@ -130,8 +159,11 @@ impl App {
                                 self.collapsed.insert(path.clone());
                             }
                         }
-                        if let Some(note) = line.dnd_release_payload::<PathBuf>() {
-                            actions.push(Action::Move { note: (*note).clone(), folder: path.clone() });
+                        if line.drag_started() {
+                            egui::DragAndDrop::set_payload(ui.ctx(), Dragged::Folder(path.clone()));
+                        }
+                        if let Some(dragged) = line.dnd_release_payload::<Dragged>() {
+                            actions.push(dragged.drop_in(path.clone()));
                         }
                         line.context_menu(|ui| {
                             if ui.button("New note here").clicked() {
@@ -140,6 +172,11 @@ impl App {
                             }
                             if ui.button("New folder here").clicked() {
                                 actions.push(Action::NewFolder(path.clone()));
+                                ui.close_menu();
+                            }
+                            ui.separator();
+                            if ui.button("Collapse others").clicked() {
+                                actions.push(Action::FoldOthers(path.clone()));
                                 ui.close_menu();
                             }
                             ui.separator();
@@ -157,7 +194,7 @@ impl App {
                     Row::Note { index, depth } => {
                         let note = &self.notes[*index];
                         let selected = self.open_path.as_deref() == Some(note.path.as_path());
-                        let look = Look { depth: *depth, label: &note.title, detail: None, selected, quiet: false, folder: None, icon: Some(Icon::of(note, daily_format)) };
+                        let look = Look { depth: *depth, label: &note.title, detail: None, count: None, selected, quiet: false, folder: None, icon: Some(Icon::of(note, daily_format)) };
                         let line = tree_row(ui, look);
                         #[cfg(test)]
                         self.list_rows.push((note.title.clone(), line.rect));
@@ -168,12 +205,11 @@ impl App {
                             actions.push(Action::OpenAt(note.path.clone()));
                         }
                         if line.drag_started() {
-                            egui::DragAndDrop::set_payload(ui.ctx(), note.path.clone());
+                            egui::DragAndDrop::set_payload(ui.ctx(), Dragged::Note(note.path.clone()));
                         }
-                        if let Some(dragged) = line.dnd_release_payload::<PathBuf>() {
+                        if let Some(dragged) = line.dnd_release_payload::<Dragged>() {
                             // Dropped on a note: it joins that note in its folder.
-                            let folder = self.vault.folder_of(&note.path);
-                            actions.push(Action::Move { note: (*dragged).clone(), folder });
+                            actions.push(dragged.drop_in(self.vault.folder_of(&note.path)));
                         }
                         note_menu(&line, note, &self.vault, &self.folders, &mut self.confirm, actions);
                     }
@@ -183,8 +219,8 @@ impl App {
             // The space under the list takes drops for the top level.
             let rest = ui.available_rect_before_wrap();
             let below = ui.interact(rest, ui.id().with("top level"), Sense::hover());
-            if let Some(note) = below.dnd_release_payload::<PathBuf>() {
-                actions.push(Action::Move { note: (*note).clone(), folder: PathBuf::new() });
+            if let Some(dragged) = below.dnd_release_payload::<Dragged>() {
+                actions.push(dragged.drop_in(PathBuf::new()));
             }
         });
         dragged_label(ui.ctx());
@@ -229,7 +265,7 @@ impl App {
                 let folder = self.vault.folder_of(&note.path);
                 let detail = (!folder.as_os_str().is_empty()).then(|| display(&folder));
                 let selected = self.open_path.as_deref() == Some(note.path.as_path());
-                let look = Look { depth: 0, label: &note.title, detail: detail.as_deref(), selected, quiet: false, folder: None, icon: Some(Icon::of(note, daily_format)) };
+                let look = Look { depth: 0, label: &note.title, detail: detail.as_deref(), count: None, selected, quiet: false, folder: None, icon: Some(Icon::of(note, daily_format)) };
                 let line = tree_row(ui, look);
                 #[cfg(test)]
                 self.list_rows.push((note.title.clone(), line.rect));
@@ -242,7 +278,7 @@ impl App {
                 note_menu(&line, note, &self.vault, &self.folders, &mut self.confirm, actions);
 
                 for (hit, text) in found.lines.iter().take(LINES_SHOWN) {
-                    let look = Look { depth: 1, label: text, detail: None, selected: false, quiet: true, folder: None, icon: None };
+                    let look = Look { depth: 1, label: text, detail: None, count: None, selected: false, quiet: true, folder: None, icon: None };
                     let line = tree_row(ui, look);
                     #[cfg(test)]
                     self.list_rows.push((text.clone(), line.rect));
@@ -253,7 +289,7 @@ impl App {
                 }
                 if let Some(more) = found.lines.len().checked_sub(LINES_SHOWN).filter(|more| *more > 0) {
                     let label = format!("and {more} more");
-                    tree_row(ui, Look { depth: 1, label: &label, detail: None, selected: false, quiet: true, folder: None, icon: None });
+                    tree_row(ui, Look { depth: 1, label: &label, detail: None, count: None, selected: false, quiet: true, folder: None, icon: None });
                 }
             }
         });
@@ -294,17 +330,16 @@ fn note_menu(
     });
 }
 
-/// While a note is being dragged, show its name by the pointer.
+/// While a note or a folder is being dragged, show its name by the pointer.
 fn dragged_label(ctx: &egui::Context) {
-    let (Some(note), Some(pointer)) = (egui::DragAndDrop::payload::<PathBuf>(ctx), ctx.pointer_latest_pos()) else {
+    let (Some(dragged), Some(pointer)) = (egui::DragAndDrop::payload::<Dragged>(ctx), ctx.pointer_latest_pos()) else {
         return;
     };
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     let visuals = ctx.style().visuals.clone();
     let font = egui::TextStyle::Button.resolve(&ctx.style());
-    let title = note.file_stem().unwrap_or_default().to_string_lossy().into_owned();
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("dragged note")));
-    let text = painter.layout_no_wrap(title, font, visuals.strong_text_color());
+    let text = painter.layout_no_wrap(dragged.name(), font, visuals.strong_text_color());
     let padding = vec2(8.0, 4.0);
     let frame = egui::Rect::from_min_size(pointer + vec2(14.0, 10.0), text.size() + 2.0 * padding);
     painter.rect_filled(frame, 4.0, visuals.selection.bg_fill.to_opaque());
@@ -372,6 +407,15 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, centre: egui::Pos2, color: eg
             }
             painter.circle_filled(at(0.0, 2.5), 1.2, color);
         }
+        Icon::FoldAll { fold } => {
+            // Two chevrons, one above the other: pointing in at each other to
+            // fold everything up, out away from each other to open it.
+            let (tips, ends) = if fold { (1.5, 6.0) } else { (6.0, 1.5) };
+            for side in [-1.0, 1.0] {
+                let chevron = vec![at(-4.5, side * ends), at(0.0, side * tips), at(4.5, side * ends)];
+                painter.add(Shape::line(chevron, stroke));
+            }
+        }
     }
 }
 
@@ -382,6 +426,9 @@ struct Look<'a> {
     label: &'a str,
     /// Something to add after the label in a quieter voice, such as a folder.
     detail: Option<&'a str>,
+    /// For a folder: how many notes are in it, shown at the end of the row
+    /// unless there are none.
+    count: Option<usize>,
     selected: bool,
     /// Smaller and fainter: a line of a note rather than a note.
     quiet: bool,
@@ -393,13 +440,14 @@ struct Look<'a> {
 }
 
 /// Draw one row across the width of the list and return its response. A row
-/// senses clicks and drags, and lights up while a dragged note is over it.
+/// senses clicks and drags, and lights up while a dragged note or folder is
+/// over it.
 fn tree_row(ui: &mut egui::Ui, look: Look) -> egui::Response {
     let font = if look.quiet { egui::TextStyle::Small } else { egui::TextStyle::Button }.resolve(ui.style());
     let height = ui.fonts(|f| f.row_height(&font)) + 2.0 * ui.spacing().button_padding.y + if look.quiet { 0.0 } else { 2.0 };
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
     let visuals = ui.visuals();
-    let dropping = response.dnd_hover_payload::<PathBuf>().is_some();
+    let dropping = response.dnd_hover_payload::<Dragged>().is_some();
     let (fill, ink) = if look.selected {
         (Some(visuals.selection.bg_fill), visuals.selection.stroke.color)
     } else if dropping {
@@ -443,13 +491,21 @@ fn tree_row(ui: &mut egui::Ui, look: Look) -> egui::Response {
         paint_icon(ui.painter(), icon, pos2(text_left + 7.0, rect.center().y), color);
         text_left += ICON;
     }
+    let small = egui::TextStyle::Small.resolve(ui.style());
+    let mut text_right = rect.right() - PADDING;
+    if let Some(count) = look.count.filter(|count| *count > 0) {
+        // Against the right edge, so that the counts of a list make a column.
+        let count = ui.fonts(|f| f.layout_no_wrap(count.to_string(), small.clone(), visuals.weak_text_color()));
+        text_right -= count.size().x;
+        ui.painter().galley(pos2(text_right, rect.center().y - count.size().y / 2.0), count, visuals.weak_text_color());
+        text_right -= 8.0;
+    }
     let mut job = LayoutJob::single_section(look.label.to_owned(), TextFormat { font_id: font.clone(), color: ink, ..Default::default() });
     if let Some(detail) = look.detail {
-        let small = egui::TextStyle::Small.resolve(ui.style());
         job.append(detail, 8.0, TextFormat { font_id: small, color: visuals.weak_text_color(), ..Default::default() });
     }
     // A long name is cut short rather than pushing the panel wider.
-    job.wrap = TextWrapping::truncate_at_width((rect.right() - PADDING - text_left).max(0.0));
+    job.wrap = TextWrapping::truncate_at_width((text_right - text_left).max(0.0));
     let text = ui.fonts(|f| f.layout_job(job));
     ui.painter().galley(pos2(text_left, rect.center().y - text.size().y / 2.0), text, ink);
     response

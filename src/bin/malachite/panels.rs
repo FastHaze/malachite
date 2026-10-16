@@ -154,7 +154,8 @@ impl App {
         let range = panel_range(ctx, LIST_WIDTH, info);
         egui::SidePanel::left("notes").default_width(230.0).width_range(range).show(ctx, |ui| {
             // The tools of the list, as pictures: a new note, a new folder,
-            // today's note. Their row is one of the bars the window is moved by.
+            // today's note, and every folder folded or unfolded. Their row is
+            // one of the bars the window is moved by.
             window::title_bar(ui);
             ui.horizontal(|ui| {
                 let here = "in the folder of the open note";
@@ -166,8 +167,13 @@ impl App {
                 let note = tool(ui, Icon::Note, true);
                 let folder = tool(ui, Icon::Folder { open: false }, true);
                 let today = tool(ui, Icon::Daily, false);
+                // It unfolds once there is nothing left showing to fold.
+                let fold = !self.all_folded();
+                let folding = ui.add_enabled_ui(!self.folders.is_empty(), |ui| tool(ui, Icon::FoldAll { fold }, false)).inner;
                 #[cfg(test)]
                 self.spots.extend([("New note", note.rect), ("New folder", folder.rect), ("Today", today.rect)]);
+                #[cfg(test)]
+                self.spots.insert(if fold { "Collapse all" } else { "Expand all" }, folding.rect);
                 if note.on_hover_text(format!("New note {new_here} (Ctrl+N)")).clicked() {
                     actions.push(Action::New);
                 }
@@ -176,6 +182,9 @@ impl App {
                 }
                 if today.on_hover_text("Open today's daily note").clicked() {
                     actions.push(Action::Daily);
+                }
+                if folding.on_hover_text(if fold { "Collapse all folders" } else { "Expand all folders" }).clicked() {
+                    actions.push(Action::FoldFolders(fold));
                 }
             });
             self.search_box(ui, actions);

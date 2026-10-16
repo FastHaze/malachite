@@ -8,6 +8,17 @@ fixes things.
 
 ## [Unreleased]
 
+### Added
+- A tool above the note list that collapses every folder, and expands them
+  all again; "Collapse all folders" and "Expand all folders" in the command
+  palette.
+- "Collapse others" in a folder's right-click menu.
+- Each folder in the note list shows how many notes are in it.
+- Folders are moved by dragging them, as notes are.
+
+### Changed
+- Folded folders are remembered for each vault between runs.
+
 ## [0.1.0] - 2026-10-15
 
 The first public release.

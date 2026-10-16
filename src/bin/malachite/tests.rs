@@ -2398,7 +2398,7 @@ const FOLDING: &str = "# A\none\ntwo\nthree\n# B\nend";
 
 #[test]
 fn the_arrow_beside_a_heading_folds_what_is_under_it() {
-    let mut t = TempApp::new("fold", &[("A", FOLDING)]);
+    let mut t = TempApp::new("fold-heading", &[("A", FOLDING)]);
     let below = t.fold_arrow("# B").y;
     let arrow = t.fold_arrow("# A");
     t.click(arrow);
@@ -3094,6 +3094,211 @@ fn the_tools_above_the_list_are_pictures_that_make_a_note_a_folder_and_today() {
     let open = t.0.open.clone().expect("today's note is open");
     assert!(malachite::daily_date(&open, malachite::DAILY_FORMAT).is_some(), "{open} is a day");
     assert!(!t.0.failed());
+}
+
+#[test]
+fn the_last_tool_above_the_list_folds_every_folder_and_then_unfolds_them_all() {
+    let mut t = TempApp::new("fold-all", &[("Top", ""), ("Projects/Plan", ""), ("Projects/2026/Goals", ""), ("Archive/Old", "")]);
+    t.0.apply(Action::Open("Top".into()));
+    let everything = ["Archive", "Old", "Projects", "2026", "Goals", "Plan", "Top"];
+    assert_eq!(t.listed(), everything);
+    let collapse = t.spot("Collapse all");
+    t.click(collapse);
+    assert_eq!(t.listed(), ["Archive", "Projects", "Top"]);
+
+    // The folders inside were folded as well.
+    let projects = t.row("Projects");
+    t.click(projects);
+    assert_eq!(t.listed(), ["Archive", "Projects", "2026", "Plan", "Top"]);
+    // A folder showing is open, so the tool folds again rather than unfolding.
+    let collapse = t.spot("Collapse all");
+    t.click(collapse);
+    assert_eq!(t.listed(), ["Archive", "Projects", "Top"]);
+    let expand = t.spot("Expand all");
+    assert_eq!(expand, collapse, "the same button, now with its other picture");
+    t.click(expand);
+    assert_eq!(t.listed(), everything);
+    assert!(!t.0.failed());
+}
+
+#[test]
+fn the_fold_tool_goes_by_what_the_list_shows() {
+    let mut t = TempApp::new("fold-all-shown", &[("Top", ""), ("Projects/Plan", ""), ("Projects/2026/Goals", "")]);
+    t.0.apply(Action::Open("Top".into()));
+    let projects = t.row("Projects");
+    t.click(projects);
+    assert_eq!(t.listed(), ["Projects", "Top"]);
+    // 2026 is still open, but out of sight: there is nothing left showing to fold.
+    let expand = t.spot("Expand all");
+    t.click(expand);
+    assert_eq!(t.listed(), ["Projects", "2026", "Goals", "Plan", "Top"]);
+
+    // Without folders there is nothing for it to do.
+    let mut flat = TempApp::new("fold-all-flat", &[("A", ""), ("B", "")]);
+    let collapse = flat.spot("Collapse all");
+    flat.click(collapse);
+    assert!(flat.0.collapsed.is_empty() && !flat.0.failed());
+}
+
+#[test]
+fn folders_collapse_and_expand_from_the_command_palette() {
+    let mut t = TempApp::new("fold-all-palette", &[("Top", ""), ("Projects/Plan", ""), ("Projects/2026/Goals", "")]);
+    t.0.apply(Action::Open("Top".into()));
+    t.0.show_list = false;
+    t.frame();
+    t.keys(vec![ctrl(egui::Key::P), typed("collapse all")]);
+    assert_eq!(t.0.picked_from, ["Collapse all folders"]);
+    t.keys(vec![key(egui::Key::Enter)]);
+    assert!(t.0.show_list, "the list comes out to show what was done to it");
+    assert_eq!(t.listed(), ["Projects", "Top"]);
+    t.keys(vec![ctrl(egui::Key::P), typed("expand all"), key(egui::Key::Enter)]);
+    assert_eq!(t.listed(), ["Projects", "2026", "Goals", "Plan", "Top"]);
+}
+
+impl TempApp {
+    /// Every piece of text a frame draws, and where.
+    fn texts(&mut self) -> Vec<(String, egui::Rect)> {
+        let shapes = self.frame_full(Vec::new()).shapes;
+        let text = |clipped: &egui::epaint::ClippedShape| match &clipped.shape {
+            egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.galley.rect.translate(text.pos.to_vec2()))),
+            _ => None,
+        };
+        shapes.iter().filter_map(text).collect()
+    }
+
+    /// What else is written on the row of the list that says `label`.
+    fn beside(&mut self, label: &str) -> Vec<String> {
+        self.frame();
+        let texts = self.texts();
+        let found = self.0.list_rows.iter().find(|(text, _)| text == label);
+        let row = found.unwrap_or_else(|| panic!("no row '{label}' in the list")).1;
+        texts.into_iter().filter(|(text, at)| row.contains(at.center()) && text != label).map(|(text, _)| text).collect()
+    }
+
+    /// Right-click the row of the list that says `label` and pick `choice`
+    /// from the menu that brings up.
+    fn pick_from_row_menu(&mut self, label: &str, choice: &str) {
+        let pos = self.row(label);
+        self.frame_with(vec![egui::Event::PointerMoved(pos)]);
+        self.frame_with(vec![button(egui::PointerButton::Secondary, pos, true)]);
+        self.frame_with(vec![button(egui::PointerButton::Secondary, pos, false)]);
+        self.frame();
+        let found = self.texts().into_iter().find(|(text, _)| text == choice);
+        let spot = found.unwrap_or_else(|| panic!("no '{choice}' in the menu of '{label}'")).1.center();
+        self.click(spot);
+    }
+}
+
+#[test]
+fn collapse_others_folds_every_folder_but_the_one_picked_and_those_it_is_in() {
+    let notes = [("Top", ""), ("Archive/Old", ""), ("Projects/Plan", ""), ("Projects/2026/Goals", ""), ("Projects/2026/Deep/Down", "")];
+    let mut t = TempApp::new("fold-others", &notes);
+    t.0.apply(Action::Open("Top".into()));
+    assert_eq!(t.listed(), ["Archive", "Old", "Projects", "2026", "Deep", "Down", "Goals", "Plan", "Top"]);
+    t.pick_from_row_menu("2026", "Collapse others");
+    assert_eq!(t.listed(), ["Archive", "Projects", "2026", "Deep", "Goals", "Plan", "Top"], "the folders inside it are folded too");
+    // A folded folder opens for it.
+    t.pick_from_row_menu("Archive", "Collapse others");
+    assert_eq!(t.listed(), ["Archive", "Old", "Projects", "Top"]);
+    assert!(!t.0.failed());
+}
+
+#[test]
+fn a_folder_shows_how_many_notes_are_in_it() {
+    let notes = [("Top", ""), ("Projects/Plan", ""), ("Projects/2026/Goals", ""), ("Projects/2026/More", "")];
+    let mut t = TempApp::new("folder-counts", &notes);
+    t.0.vault.create_folder(Path::new(""), "Empty").unwrap();
+    t.0.reload().unwrap();
+    assert_eq!(t.beside("Projects"), ["3"], "counting those in the folders inside it");
+    assert_eq!(t.beside("2026"), ["2"]);
+    assert!(t.beside("Empty").is_empty(), "nothing for none");
+    assert!(t.beside("Plan").is_empty(), "and notes have no count");
+
+    // Folded or not, and as notes come and go.
+    let projects = t.row("Projects");
+    t.click(projects);
+    assert_eq!(t.beside("Projects"), ["3"]);
+    t.0.apply(Action::NewIn(PathBuf::from("Projects")));
+    assert_eq!(t.beside("Projects"), ["4"]);
+}
+
+#[test]
+fn dragging_a_folder_moves_it_with_everything_in_it() {
+    let notes = [("Inbox", "i"), ("Archive/Old", "o"), ("Projects/Plan", "p"), ("Projects/2026/Goals", "g")];
+    let mut t = TempApp::new("drag-folder", &notes);
+    t.0.apply(Action::Open("Plan".into()));
+    t.type_text("!");
+    t.0.collapsed.insert(PathBuf::from("Projects/2026"));
+    let (from, to) = (t.row("Projects"), t.row("Archive"));
+    t.drag(from, to);
+    assert!(!t.0.failed());
+    assert_eq!((t.folder_of("Plan"), t.folder_of("Goals")), ("Archive/Projects".to_owned(), "Archive/Projects/2026".to_owned()));
+    assert_eq!((t.0.open.as_deref(), t.0.buffer.as_str()), (Some("Plan"), "p!"), "the open note goes with it");
+    assert_eq!(t.on_disk("Plan"), "p!", "saved on the way");
+    assert_eq!(t.listed(), ["Archive", "Projects", "2026", "Plan", "Old", "Inbox"], "the folder inside stays folded");
+
+    // Onto a note, into that note's folder; below the list, to the top level.
+    let (from, to) = (t.row("2026"), t.row("Inbox"));
+    t.drag(from, to);
+    assert_eq!(t.folder_of("Goals"), "2026");
+    let from = t.row("Projects");
+    t.drag(from, egui::pos2(from.x, 600.0));
+    assert_eq!(t.folder_of("Plan"), "Projects");
+    assert!(!t.0.failed());
+
+    // Let go of on itself, it stays; into a folder inside it, it cannot go.
+    let projects = t.row("Projects");
+    t.drag(projects, projects);
+    assert!(!t.0.failed());
+    t.0.vault.create_folder(Path::new("Projects"), "Inner").unwrap();
+    t.0.reload().unwrap();
+    let (from, to) = (t.row("Projects"), t.row("Inner"));
+    t.drag(from, to);
+    assert!(t.0.failed());
+    assert_eq!(t.folder_of("Plan"), "Projects");
+}
+
+#[test]
+fn folded_folders_are_remembered_for_each_vault_between_runs() {
+    let make = |name: &str, notes: &[&str]| {
+        let dir = std::env::temp_dir().join(format!("malachite-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let vault = Vault::open(&dir).unwrap();
+        for note in notes {
+            let (folder, title) = note.rsplit_once('/').unwrap_or(("", note));
+            vault.create_in(Path::new(folder), Some(title), "", &[]).unwrap();
+        }
+        dir
+    };
+    let here = make("fold-remembered", &["Archive/Old", "Projects/Plan", "Top"]);
+    let other = make("fold-remembered-other", &["Work/Task", "Loose"]);
+    let settings = here.join(".settings").join("settings.txt");
+
+    let mut t = TempApp::start(here.clone(), Some(settings.clone()));
+    assert_eq!(t.0.open.as_deref(), Some("Old"));
+    let archive = t.row("Archive");
+    t.click(archive);
+    let folded = ["Archive", "Projects", "Plan", "Top"];
+    assert_eq!(t.listed(), folded);
+    t.0.apply(Action::OpenVault(other.clone()));
+    let work = t.row("Work");
+    t.click(work);
+    assert_eq!(t.listed(), ["Work", "Loose"]);
+    t.0.apply(Action::OpenVault(here.clone()));
+    assert_eq!(t.listed(), folded, "each vault has its own");
+    assert!(fs::read_to_string(&settings).unwrap().contains("\nfolded = Archive\n"));
+
+    // And so they are the next time the app starts, the open note's folder too.
+    let mut again = TempApp::start(here.clone(), Some(settings.clone()));
+    assert_eq!(again.0.open.as_deref(), Some("Old"));
+    assert_eq!(again.listed(), folded);
+    again.0.apply(Action::OpenVault(other.clone()));
+    assert_eq!(again.listed(), ["Work", "Loose"]);
+
+    // A folder that has gone since is let go of.
+    fs::write(&settings, format!("recent = {}\nfolded = Gone\nfolded = Projects\n", here.display())).unwrap();
+    let last = TempApp::start(here.clone(), Some(settings));
+    assert_eq!(last.0.folded_here(), ["Projects"]);
 }
 
 #[test]
