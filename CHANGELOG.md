@@ -19,6 +19,12 @@ fixes things.
 ### Changed
 - Folded folders are remembered for each vault between runs.
 
+### Fixed
+- Renaming or moving a folder that the vault's settings name, or one with
+  such a folder in it, changes those settings to where it is now: the
+  templates folder, the daily notes' folder and template, and the folder for
+  new notes no longer point to where it was.
+
 ## [0.1.0] - 2026-10-15
 
 The first public release.

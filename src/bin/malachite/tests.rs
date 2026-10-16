@@ -3566,6 +3566,73 @@ fn templates_and_daily_notes_follow_the_settings() {
 }
 
 #[test]
+fn renaming_a_folder_the_settings_name_changes_them_to_its_new_name() {
+    let notes = [("Meta/Bits/Day", "# {{title}}"), ("Life/Journal/Old", "o"), ("Lifelong/Plan", "p")];
+    let mut t = TempApp::new("rename-folder-settings", &notes);
+    let file = files::vault_file(t.0.vault.root());
+    let before = "[files]\n# Mine, by hand.\ntemplates = Meta/Bits\ndaily_folder = Life/Journal\ndaily_template = Meta/Bits/Day\nnew_notes = folder\nnew_notes_folder = Lifelong\n";
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, before).unwrap();
+    t.frame_with(vec![egui::Event::WindowFocused(true)]);
+    assert_eq!(t.0.files.templates, Path::new("Meta/Bits"));
+
+    // The templates folder itself, and a folder the daily notes' folder is in.
+    t.0.apply(Action::RenameFolder(PathBuf::from("Meta/Bits"), "Pieces".into()));
+    t.0.apply(Action::RenameFolder(PathBuf::from("Life"), "Days".into()));
+    t.frame();
+    assert!(!t.0.failed());
+    let named = &t.0.files;
+    assert_eq!((named.templates.as_path(), named.daily_template.as_str()), (Path::new("Meta/Pieces"), "Meta/Pieces/Day"));
+    assert_eq!((named.daily_folder.as_path(), named.new_notes_folder.as_path()), (Path::new("Days/Journal"), Path::new("Lifelong")), "a folder whose name only starts the same stays");
+    let after = before.replace("Meta/Bits", "Meta/Pieces").replace("Life/Journal", "Days/Journal");
+    assert_eq!(fs::read_to_string(&file).unwrap(), after, "those lines change, and nothing else");
+
+    // And they are where the app goes on looking.
+    assert_eq!(t.0.templates().map(|note| note.title.as_str()).collect::<Vec<_>>(), ["Day"]);
+    let today = malachite::template::formatted(chrono::Local::now().naive_local(), "YYYY-MM-DD");
+    t.0.apply(Action::Daily);
+    assert_eq!((t.folder_of(&today), t.0.buffer.clone()), ("Days/Journal".to_owned(), format!("# {today}")));
+    assert!(!t.0.failed());
+}
+
+#[test]
+fn moving_a_folder_the_settings_name_changes_them_to_where_it_is_now() {
+    let notes = [("Templates/Day", "# {{title}}"), ("Life/Journal/Old", "o"), ("Archive/Done", "d")];
+    let mut t = TempApp::new("move-folder-settings", &notes);
+    let file = files::vault_file(t.0.vault.root());
+    // Left alone, the templates are in Templates: moved, the file is started to say where.
+    t.0.apply(Action::MoveFolder { folder: PathBuf::from("Templates"), into: PathBuf::from("Archive") });
+    t.frame();
+    assert!(!t.0.failed());
+    assert_eq!(t.0.files.templates, Path::new("Archive/Templates"));
+    assert_eq!(fs::read_to_string(&file).unwrap(), files::vault_template().replace("# templates = Templates", "templates = Archive/Templates"));
+
+    // A folder the daily notes' folder is in.
+    t.0.set_option(files::SECTION, "daily_folder", "Life/Journal", "");
+    t.0.set_option(files::SECTION, "daily_template", "Archive/Templates/Day", "");
+    t.frame();
+    let before = fs::read_to_string(&file).unwrap();
+    t.0.apply(Action::MoveFolder { folder: PathBuf::from("Life"), into: PathBuf::from("Archive") });
+    t.frame();
+    assert_eq!(t.0.files.daily_folder, Path::new("Archive/Life/Journal"));
+    assert_eq!(fs::read_to_string(&file).unwrap(), before.replace("daily_folder = Life/Journal", "daily_folder = Archive/Life/Journal"));
+
+    // Back at the top, the templates folder is where it is when left alone,
+    // and its line is a comment again.
+    let before = fs::read_to_string(&file).unwrap();
+    t.0.apply(Action::MoveFolder { folder: PathBuf::from("Archive/Templates"), into: PathBuf::new() });
+    t.frame();
+    assert_eq!((t.0.files.templates.as_path(), t.0.files.daily_template.as_str()), (Path::new("Templates"), "Templates/Day"));
+    let after = before.replace("\ntemplates = Archive/Templates\n", "\n# templates = Templates\n").replace("Archive/Templates/Day", "Templates/Day");
+    assert_eq!(fs::read_to_string(&file).unwrap(), after);
+
+    let today = malachite::template::formatted(chrono::Local::now().naive_local(), "YYYY-MM-DD");
+    t.0.apply(Action::Daily);
+    assert_eq!((t.folder_of(&today), t.0.buffer.clone()), ("Archive/Life/Journal".to_owned(), format!("# {today}")));
+    assert!(!t.0.failed());
+}
+
+#[test]
 fn each_vault_has_its_own_files_settings() {
     let (mut t, conf) = TempApp::with_settings("vault-settings");
     t.0.set_option(appearance::SECTION, "text_size", "20", "16");

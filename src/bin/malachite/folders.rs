@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 use malachite::{Note, Vault};
 
-use crate::files::NewNotes;
+use crate::files::{self, Files, NewNotes};
 use crate::{gone, natural_cmp, App, Focus};
 
 /// One line of the note list.
@@ -80,6 +80,17 @@ pub(crate) fn name(folder: &Path) -> String {
 /// A folder's whole path as people write it, with `/` between the parts.
 pub(crate) fn display(folder: &Path) -> String {
     folder.to_string_lossy().replace('\\', "/")
+}
+
+/// Where `path`, a folder or note the settings name, is once the folder
+/// `from` has become `to`: the same place under `to`, if it is `from` or
+/// inside it. Settings are written by hand, so folders are told apart as
+/// templates are found by theirs, without regard to case.
+fn moved_with(path: &Path, from: &Path, to: &Path) -> Option<PathBuf> {
+    let parts = |path: &Path| path.iter().map(|part| part.to_string_lossy().to_lowercase()).collect::<Vec<_>>();
+    let from_parts = parts(from);
+    let inside = !from_parts.is_empty() && parts(path).starts_with(&from_parts);
+    inside.then(|| to.iter().chain(path.iter().skip(from_parts.len())).collect())
 }
 
 impl App {
@@ -243,8 +254,8 @@ impl App {
     }
 
     /// Keep up with a folder that has been renamed or moved from `from` to
-    /// `to`: the open note may have been in it, and folders folded away
-    /// inside it stay folded.
+    /// `to`: the open note may have been in it, folders folded away inside
+    /// it stay folded, and the vault's settings that name it go on naming it.
     fn follow_folder(&mut self, from: &Path, to: &Path) {
         let moved = |path: &Path, from: &Path, to: &Path| match path.strip_prefix(from) {
             Ok(rest) if rest.as_os_str().is_empty() => Some(to.to_path_buf()),
@@ -256,6 +267,28 @@ impl App {
             self.open_path = Some(open);
         }
         self.collapsed = self.collapsed.drain().map(|f| moved(&f, from, to).unwrap_or(f)).collect();
+        self.follow_in_settings(from, to);
+    }
+
+    /// Rewrite the vault's settings that name the folder `from`, or a folder
+    /// inside it, to name it at `to`: the templates folder, the daily note's
+    /// folder and the folder for new notes, and the daily note's template,
+    /// which is a note that may be in it. Each is one line of the vault's
+    /// file, and nothing else in it changes.
+    fn follow_in_settings(&mut self, from: &Path, to: &Path) {
+        let settings = self.files.clone();
+        let templates = files::written(&Files::default().templates);
+        let named = [("templates", &settings.templates, templates.as_str()), ("daily_folder", &settings.daily_folder, ""), ("new_notes_folder", &settings.new_notes_folder, "")];
+        for (key, folder, default) in named {
+            if let Some(now) = moved_with(folder, from, to) {
+                self.set_option(files::SECTION, key, &files::written(&now), default);
+            }
+        }
+        // A note at the top of the vault that is called what the folder was is not in it.
+        let template = Path::new(&settings.daily_template);
+        if let Some(now) = moved_with(template, from, to).filter(|now| now != to) {
+            self.set_option(files::SECTION, "daily_template", &files::written(&now), "");
+        }
     }
 
     /// Delete `folder` and everything in it, in the way the settings say.
