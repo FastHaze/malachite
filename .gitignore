@@ -1,7 +1,7 @@
 # Build output.
 /target/
-# A copied release build kept at hand; releases are built by the workflow.
-/malachite.exe
+# Copied release builds kept at hand; releases are built by the workflow.
+/dist/
 # What the app writes into the sample vault while it is used.
 /vault/.trash/
 /vault/.malachite/

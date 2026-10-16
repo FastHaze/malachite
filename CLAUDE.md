@@ -24,7 +24,7 @@ cargo test --lib markdown::tests::lines_are_classified   # a single test
 cargo test --bin malachite <name>     # a single GUI test
 ```
 
-`malachite.exe` in the repo root is a copied release build, not a build output and not in the repository; refresh it by hand from `target/release/` if needed.
+`dist/` holds copied release builds (`malachite.exe`, `malachite-cli.exe`), kept at hand through a `cargo clean`; they are not build output and not in the repository. Refresh them by hand from `target/release/` if needed. Started from there, the app opens the vault it had open last, not `./vault`, which is relative to the working directory.
 
 ### Toolchain constraint
 

@@ -11,7 +11,7 @@ repository = "https://github.com/FastHaze/malachite"
 readme = "README.md"
 keywords = ["notes", "markdown", "wikilinks", "egui", "knowledge-base"]
 categories = ["text-editors", "gui"]
-exclude = ["/malachite.exe", "/vault/.trash", "/vault/.malachite", "/.github"]
+exclude = ["/dist", "/vault/.trash", "/vault/.malachite", "/.github"]
 
 [lib]
 name = "malachite"
