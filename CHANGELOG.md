@@ -18,6 +18,8 @@ fixes things.
 
 ### Changed
 - Folded folders are remembered for each vault between runs.
+- The vault's name in the status bar shows that it is a button: it lights up
+  under the mouse and looks pressed while held down.
 
 ### Fixed
 - Renaming or moving a folder that the vault's settings name, or one with

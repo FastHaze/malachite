@@ -71,9 +71,22 @@ impl App {
                 // The folder's name is enough to tell vaults apart; the full
                 // path is a hover away, and the other vaults a click.
                 let root = self.vault.root();
-                let name = egui::RichText::new(vault_name(root)).weak();
                 let hint = format!("Vault folder: {}\nClick to open another vault.", root.display());
-                if ui.add(egui::Button::new(name).frame(false)).on_hover_text(hint).clicked() {
+                // A button that lies flat in the bar, its name as quiet as
+                // the count beside it, until the mouse comes to it: then it
+                // has the ground and edge of any button, and is pressed in.
+                let vault = ui.scope(|ui| {
+                    let weak = ui.visuals().weak_text_color();
+                    let flat = &mut ui.visuals_mut().widgets.inactive;
+                    flat.weak_bg_fill = egui::Color32::TRANSPARENT;
+                    flat.bg_stroke = Stroke::NONE;
+                    flat.fg_stroke.color = weak;
+                    ui.add(egui::Button::new(vault_name(root)))
+                })
+                .inner;
+                #[cfg(test)]
+                self.spots.insert("Vault", vault.rect);
+                if vault.on_hover_text(hint).clicked() {
                     self.picker = Some(Picker::new(Kind::Vaults));
                 }
                 ui.weak(match self.notes.len() {

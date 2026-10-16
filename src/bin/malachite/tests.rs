@@ -1479,6 +1479,37 @@ fn the_vault_switcher_lists_the_vaults_that_were_open_before() {
 }
 
 #[test]
+fn the_vaults_name_in_the_status_bar_answers_the_mouse_as_a_button_does() {
+    let mut t = TempApp::new("vault-button", &[("A", "a")]);
+    let name = picker::vault_name(t.0.vault.root());
+    let at = t.spot("Vault");
+    let width = t.0.spots["Vault"].width();
+    let visuals = t.1.style().visuals.clone();
+    // The ground under the name and the colour of its letters, in a frame
+    // with these things happening.
+    let looks = |t: &mut TempApp, events| {
+        let (mut ground, mut ink) = (egui::Color32::TRANSPARENT, None);
+        for clipped in t.frame_full(events).shapes {
+            match clipped.shape {
+                egui::Shape::Rect(rect) if rect.rect.contains(at) && rect.rect.width() < width + 4.0 => ground = rect.fill,
+                egui::Shape::Text(text) if text.galley.text() == name => ink = Some(text.fallback_color),
+                _ => {}
+            }
+        }
+        (ground, ink.expect("the vault's name is written"))
+    };
+
+    let widgets = &visuals.widgets;
+    assert_eq!(looks(&mut t, Vec::new()), (egui::Color32::TRANSPARENT, visuals.weak_text_color()), "flat and quiet while left alone");
+    looks(&mut t, vec![egui::Event::PointerMoved(at)]);
+    assert_eq!(looks(&mut t, Vec::new()), (widgets.hovered.weak_bg_fill, widgets.hovered.fg_stroke.color), "lit up under the mouse");
+    looks(&mut t, vec![button(egui::PointerButton::Primary, at, true)]);
+    assert_eq!(looks(&mut t, Vec::new()), (widgets.active.weak_bg_fill, widgets.active.fg_stroke.color), "pressed in while held down");
+    looks(&mut t, vec![button(egui::PointerButton::Primary, at, false)]);
+    assert!(t.0.picker.is_some(), "and a click brings up the list of vaults");
+}
+
+#[test]
 fn a_typed_path_opens_that_folder_as_a_vault_or_makes_it() {
     let new = spare_folder("vault-typed");
     let mut t = TempApp::new("vault-typing", &[("A", "a")]);
