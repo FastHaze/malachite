@@ -8,6 +8,8 @@ fixes things.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
 ### Added
 - A tool above the note list that collapses every folder, and expands them
   all again; "Collapse all folders" and "Expand all folders" in the command
@@ -87,5 +89,6 @@ The first public release.
 - Windows, macOS (Apple silicon and Intel) and Linux.
 - `malachite-cli` for the terminal.
 
-[Unreleased]: https://github.com/FastHaze/malachite/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/FastHaze/malachite/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/FastHaze/malachite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FastHaze/malachite/releases/tag/v0.1.0
