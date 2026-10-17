@@ -348,7 +348,7 @@ impl App {
         }
         file.unsaved |= !path.is_file();
         self.write_conf();
-        if let Err(e) = open_in_editor(&path) {
+        if let Err(e) = open_outside(&path, true) {
             self.fail(format!("Could not open {}: {e}", path.display()));
         }
     }
@@ -481,6 +481,12 @@ impl App {
             if ui.checkbox(&mut limited, "").changed() || dragged {
                 let value = if limited { number(width) } else { "0".to_owned() };
                 self.set_option(SECTION, "line_width", &value, &number(appearance::LINE_WIDTH));
+            }
+        });
+        setting(ui, "Note title", "The note's name above its text, where it can be renamed. F2 renames it either way.", |ui| {
+            let mut shown = look.show_title;
+            if ui.checkbox(&mut shown, "").changed() {
+                self.set_option(SECTION, "show_title", &shown.to_string(), "true");
             }
         });
         setting(ui, "Zoom", "Of the whole window: Ctrl with + and −. Remembered, though not a line of the file.", |ui| {
@@ -640,12 +646,13 @@ impl App {
     }
 }
 
-/// Open a text file in the system's plain text editor.
-fn open_in_editor(path: &Path) -> std::io::Result<()> {
+/// Open a file in the program the system has for it, or with `text` in its
+/// plain text editor.
+pub(crate) fn open_outside(path: &Path, text: bool) -> std::io::Result<()> {
     let (program, arguments): (&str, &[&str]) = if cfg!(windows) {
-        ("notepad.exe", &[])
+        (if text { "notepad.exe" } else { "explorer.exe" }, &[])
     } else if cfg!(target_os = "macos") {
-        ("open", &["-t"])
+        ("open", if text { &["-t"] } else { &[] })
     } else {
         ("xdg-open", &[])
     };

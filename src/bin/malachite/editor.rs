@@ -102,8 +102,12 @@ impl App {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
                     ui.set_width(width);
                     ui.add_space(GUTTER);
-                    self.title(ui, &open, &theme, actions);
-                    ui.add_space(GUTTER / 2.0);
+                    // A hidden title still comes out to be renamed (F2, a new note).
+                    let renaming = self.focus == Some(Focus::Title) || ui.memory(|m| m.has_focus(egui::Id::new("title")));
+                    if self.look.show_title || renaming {
+                        self.title(ui, &open, &theme, actions);
+                        ui.add_space(GUTTER / 2.0);
+                    }
                     #[cfg(test)]
                     {
                         self.content_top = ui.cursor().top();
@@ -114,13 +118,22 @@ impl App {
                         Mode::Reading => {
                             // There is nothing to edit in a finished note,
                             // and no caret to send anywhere: a place to go
-                            // to is only scrolled to.
+                            // to is only scrolled to, and opened if it is
+                            // folded away. A caret that folding has moved
+                            // out of a fold waits for the editor.
                             self.pending_edit = None;
                             self.pending_insert = None;
-                            self.caret = None;
                             let goto = self.jump.take().map(|range| range.start);
+                            let nothing = HashSet::new();
+                            let folded = self.folds.get(&file).unwrap_or(&nothing);
                             let mut embeds = Embeds { pictures: &mut self.pictures, vault: &self.vault, notes: &self.notes, version: self.version, scanned: self.scanned };
-                            reading::show(ui, &self.buffer, &theme, &exists, goto, &mut embeds)
+                            let read = reading::show(ui, &self.buffer, &theme, &exists, goto, folded, &mut embeds);
+                            if let Some(folded) = self.folds.get_mut(&file) {
+                                folded.retain(|line| !read.unfolded.contains(line));
+                            }
+                            let id = ui.make_persistent_id(("reading", &file));
+                            self.fold_arrows(ui, id, read.arrows, &theme);
+                            read.hit
                         }
                         mode => self.edit(ui, &file, mode == Mode::Source, rest, &theme, &exists),
                     }
@@ -226,14 +239,18 @@ impl App {
             }
         }
         let sizes = std::rc::Rc::new(sizes);
+        let tables = std::rc::Rc::new(self.table_heights.clone());
 
         let nothing = HashSet::new();
         let folded = self.folds.get(file).unwrap_or(&nothing);
 
         let mut preview = None;
         let (kept, notes) = (&mut self.layout, self.version);
+        // The text the cursor was taken in; a key the field has just taken changes it.
+        let typed_into = self.buffer.clone();
         let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-            let blocks = live::Blocks { width: wrap_width, sizes: sizes.clone() };
+            let blocks = live::Blocks { width: wrap_width, sizes: sizes.clone(), tables: tables.clone() };
+            let cursor = cursor.as_ref().map(|c| if text == typed_into { c.clone() } else { live::follow(&typed_into, text, c) });
             let (mut job, built) = live::build_kept(kept, text, cursor.as_ref(), source, theme, exists, notes, folded, &blocks);
             job.wrap.max_width = wrap_width;
             preview = Some(built);
@@ -299,9 +316,8 @@ impl App {
         let rooms = preview.embeds(&out.galley, out.galley_pos, &offsets);
         let caret = self.caret_rect(ui, id, &out, before, &rooms);
         let mut embedded_hit = None;
-        for live::Room { corner, height, row, text_end, embed } in rooms {
+        for live::Room { corner, height, row, text_end, shown } in rooms {
             let room = egui::Rect::from_min_size(corner, egui::vec2(width.span(), height));
-            let Link::Embed { target, width: wanted, .. } = &embed else { continue };
             if !ui.is_rect_visible(room) {
                 continue;
             }
@@ -319,6 +335,24 @@ impl App {
                 ui.painter().rect_filled(beside, 0.0, theme.page);
             }
             let mut embeds = Embeds { pictures: &mut self.pictures, vault: &self.vault, notes: &self.notes, version: self.version, scanned: self.scanned };
+            let embed = match shown {
+                live::Shown::Embed(embed) => embed,
+                live::Shown::Table(range) => {
+                    let Some(table) = self.buffer.get(range) else { continue };
+                    let mut inside = ui.new_child(egui::UiBuilder::new().max_rect(room).id_salt(("table", corner.y as i64)));
+                    inside.set_clip_rect(room.intersect(ui.clip_rect()));
+                    // A click on the grid goes through to the text, and shows the table's lines.
+                    inside.style_mut().interaction.selectable_labels = false;
+                    embedded_hit = reading::table(&mut inside, table, theme, exists, &mut embeds).or(embedded_hit);
+                    let used = inside.min_rect().height();
+                    if (used - height).abs() > 0.5 {
+                        self.table_heights.insert(table.to_owned(), used);
+                        ui.ctx().request_repaint();
+                    }
+                    continue;
+                }
+            };
+            let Link::Embed { target, width: wanted, .. } = &embed else { continue };
             if malachite::is_attachment(target) {
                 if let Some((texture, size)) = embeds.picture(ui.ctx(), target) {
                     let shown = egui::Rect::from_min_size(corner, fit(size, *wanted, room.width()));
@@ -348,30 +382,7 @@ impl App {
             return embedded_hit;
         }
 
-        // The arrows that fold: beside a folded line always, and beside the
-        // line the mouse is on.
-        let arrows = preview.arrows(&out.galley, out.galley_pos, &offsets);
-        #[cfg(test)]
-        {
-            self.fold_spots = arrows.iter().map(|(rect, line, _)| (rect.center(), self.buffer[line.clone()].to_owned())).collect();
-        }
-        let mouse = ui.input(|i| i.pointer.hover_pos()).filter(|pos| ui.clip_rect().contains(*pos));
-        let mut toggled = None;
-        for (rect, line, folded) in arrows {
-            let pointed = mouse.is_some_and(|pos| rect.y_range().contains(pos.y));
-            if !(folded || pointed) || !ui.is_rect_visible(rect) {
-                continue;
-            }
-            let arrow = ui.interact(rect, id.with(("fold", line.start)), egui::Sense::click());
-            live::paint_arrow(ui.painter(), rect, folded, if arrow.hovered() { theme.text } else { theme.faint });
-            let hint = if folded { "Unfold" } else { "Fold" };
-            if arrow.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint).clicked() {
-                toggled = Some(line);
-            }
-        }
-        if let Some(line) = toggled {
-            self.toggle_fold(line);
-        }
+        self.fold_arrows(ui, id, preview.arrows(&out.galley, out.galley_pos, &offsets), theme);
 
         // If the cursor moved, what is hidden and shown changes: draw again.
         if out.cursor_range.map(|range| range.as_sorted_char_range()) != selection {
@@ -395,6 +406,36 @@ impl App {
         }
         ui.ctx().stop_dragging();
         Some(hit)
+    }
+
+    /// The arrows that fold, in the editor and in Reading view alike: beside
+    /// a folded line always, and beside the line the mouse is on. `arrows`
+    /// says where each line that folds has its arrow, and whether it is
+    /// folded; a click on one folds its line or unfolds it. They are drawn
+    /// after the note, so that a click on one is theirs, and their ids are
+    /// made from `id`, the view's.
+    fn fold_arrows(&mut self, ui: &egui::Ui, id: egui::Id, arrows: Vec<(egui::Rect, Range<usize>, bool)>, theme: &Theme) {
+        #[cfg(test)]
+        {
+            self.fold_spots = arrows.iter().map(|(rect, line, _)| (rect.center(), self.buffer[line.clone()].to_owned())).collect();
+        }
+        let mouse = ui.input(|i| i.pointer.hover_pos()).filter(|pos| ui.clip_rect().contains(*pos));
+        let mut toggled = None;
+        for (rect, line, folded) in arrows {
+            let pointed = mouse.is_some_and(|pos| rect.y_range().contains(pos.y));
+            if !(folded || pointed) || !ui.is_rect_visible(rect) {
+                continue;
+            }
+            let arrow = ui.interact(rect, id.with(("fold", line.start)), egui::Sense::click());
+            live::paint_arrow(ui.painter(), rect, folded, if arrow.hovered() { theme.text } else { theme.faint });
+            let hint = if folded { "Unfold" } else { "Fold" };
+            if arrow.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint).clicked() {
+                toggled = Some(line);
+            }
+        }
+        if let Some(line) = toggled {
+            self.toggle_fold(line);
+        }
     }
 
     /// Where the caret is to be drawn, if the editor has one to show: from a

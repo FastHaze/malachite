@@ -289,6 +289,8 @@ pub struct Appearance {
     pub text_size: f32,
     /// How wide a note's lines may get, in points, or 0 for no limit.
     pub line_width: f32,
+    /// Whether the note's name is shown above it.
+    pub show_title: bool,
     /// The colours the file sets, of the light scheme and of the dark one,
     /// in the order of `PAINTS`. They hold in whichever theme.
     set: [[Option<[u8; 4]>; PAINTS.len()]; 2],
@@ -296,7 +298,7 @@ pub struct Appearance {
 
 impl Default for Appearance {
     fn default() -> Self {
-        Self { palette: Palette::default(), scheme: Scheme::System, text_size: TEXT_SIZE, line_width: LINE_WIDTH, set: [[None; PAINTS.len()]; 2] }
+        Self { palette: Palette::default(), scheme: Scheme::System, text_size: TEXT_SIZE, line_width: LINE_WIDTH, show_title: true, set: [[None; PAINTS.len()]; 2] }
     }
 }
 
@@ -357,6 +359,7 @@ impl Appearance {
             "text_size" => self.text_size = number(&TEXT_SIZES)?,
             // Nothing, or less than nothing, is no limit.
             "line_width" => self.line_width = if value.parse::<f32>().is_ok_and(|width| width <= 0.0) { 0.0 } else { number(&LINE_WIDTHS)? },
+            "show_title" => self.show_title = value.parse().map_err(|_| format!("`{value}` is not true or false"))?,
             _ => return Err(format!("there is no setting called `{key}`")),
         }
         Ok(())
@@ -465,6 +468,7 @@ pub fn template() -> String {
     text.push_str(&format!("# text_size = {}\n", number(TEXT_SIZE)));
     text.push_str("# How wide a line of a note may get, in points. 0 is as wide as the window.\n");
     text.push_str(&format!("# line_width = {}\n", number(LINE_WIDTH)));
+    text.push_str("# Whether the note's name is shown above it, where it can be renamed.\n# show_title = true\n");
     for dark in [true, false] {
         text.push_str(&format!("\n{}\n[{}]\n", colors_about(dark, theme).join("\n"), colors(dark)));
         for (paint, color) in PAINTS.iter().zip(theme.colors(dark)) {

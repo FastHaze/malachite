@@ -85,6 +85,10 @@ pub(crate) enum Icon {
     /// Not a row's: the tool that folds every folder away, or with `fold`
     /// false unfolds them all.
     FoldAll { fold: bool },
+    /// A file that is not a note: a picture, say.
+    File,
+    /// Not a row's either: the vault, on its button in the status bar.
+    Vault,
 }
 
 impl Icon {
@@ -114,7 +118,7 @@ impl App {
             // The depth of the folded folder whose contents are being skipped.
             let mut folded: Option<usize> = None;
             for row in &self.rows {
-                let (Row::Folder { depth, .. } | Row::Note { depth, .. }) = row;
+                let (Row::Folder { depth, .. } | Row::Note { depth, .. } | Row::File { depth, .. }) = row;
                 if folded.is_some_and(|hidden| *depth > hidden) {
                     continue;
                 }
@@ -212,6 +216,16 @@ impl App {
                             actions.push(dragged.drop_in(self.vault.folder_of(&note.path)));
                         }
                         note_menu(&line, note, &self.vault, &self.folders, &mut self.confirm, actions);
+                    }
+                    Row::File { path, depth } => {
+                        let label = path.file_name().unwrap_or_default().to_string_lossy();
+                        let look = Look { depth: *depth, label: &label, detail: None, count: None, selected: false, quiet: false, folder: None, icon: Some(Icon::File) };
+                        let line = tree_row(ui, look).on_hover_text("Opens in the program the system has for it");
+                        #[cfg(test)]
+                        self.list_rows.push((label.to_string(), line.rect));
+                        if line.clicked() {
+                            actions.push(Action::OpenFile(path.clone()));
+                        }
                     }
                 }
             }
@@ -373,7 +387,7 @@ pub(crate) fn tool(ui: &mut egui::Ui, icon: Icon, adds: bool) -> egui::Response 
 }
 
 /// Draw a row's picture around `centre`, in a box some 14 points across.
-fn paint_icon(painter: &egui::Painter, icon: Icon, centre: egui::Pos2, color: egui::Color32) {
+pub(crate) fn paint_icon(painter: &egui::Painter, icon: Icon, centre: egui::Pos2, color: egui::Color32) {
     let stroke = Stroke::new(1.2, color);
     let at = |x: f32, y: f32| centre + vec2(x, y);
     match icon {
@@ -397,6 +411,13 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, centre: egui::Pos2, color: eg
                 painter.hline(centre.x - 2.5..=centre.x + 2.5, centre.y + y, faint);
             }
         }
+        Icon::File => {
+            // A page with its corner turned down, as a note's, but nothing written on it.
+            let page = vec![at(-4.5, -6.5), at(1.5, -6.5), at(4.5, -3.5), at(4.5, 6.5), at(-4.5, 6.5)];
+            painter.add(Shape::closed_line(page, stroke));
+            painter.add(Shape::line(vec![at(1.5, -6.5), at(1.5, -3.5), at(4.5, -3.5)], stroke));
+            painter.circle_filled(at(0.0, 2.0), 1.5, color);
+        }
         Icon::Daily => {
             // A calendar: a page with a band across the top and two rings.
             let page = egui::Rect::from_min_max(at(-5.5, -5.0), at(5.5, 6.0));
@@ -415,6 +436,11 @@ fn paint_icon(painter: &egui::Painter, icon: Icon, centre: egui::Pos2, color: eg
                 let chevron = vec![at(-4.5, side * ends), at(0.0, side * tips), at(4.5, side * ends)];
                 painter.add(Shape::line(chevron, stroke));
             }
+        }
+        Icon::Vault => {
+            // A strongbox: its door, and the dial on it.
+            painter.rect_stroke(egui::Rect::from_center_size(centre, vec2(11.0, 10.0)), 1.5, stroke, egui::StrokeKind::Inside);
+            painter.circle_stroke(centre, 2.2, stroke);
         }
     }
 }

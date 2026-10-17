@@ -8,45 +8,75 @@
 //! picture, a note (or the heading or block of one) as that note rendered in
 //! a box, by this same code a level deeper. Footnotes are numbered in the
 //! order they are referred to and listed at the end.
+//!
+//! A note folds here as it does in the editor, by the same folds: what a
+//! folded heading or list item hides is not drawn, and the line ends in
+//! dots. Where the arrows go is handed back for the editor's code to draw
+//! and click, so that both views fold alike. A note embedded in another is
+//! drawn whole.
 
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::text_selection::LabelSelectionState;
-use eframe::egui::{self, vec2, Color32, CursorIcon, Galley, Margin, Sense, Stroke, TextFormat};
+use eframe::egui::{self, vec2, Color32, CursorIcon, Galley, Margin, Rect, Sense, Stroke, TextFormat};
 use malachite::highlight::highlight;
 use malachite::markdown::{self, Kind, Line, Link, Span, Style};
+use malachite::outline::{self, Fold};
 
 use crate::embed::{fit, Embeds};
-use crate::live::{char_at, resolved, Hit};
+use crate::live::{self, char_at, resolved, Hit};
 use crate::theme::Theme;
 
 /// How many notes deep embeds are followed: a note that embeds itself, or
 /// two that embed each other, stop here.
 const DEPTH: usize = 3;
 
-/// Draw `text` rendered. Returns the link or checkbox that was clicked.
-/// `goto` is a place in the note, as a byte offset, to bring to the top of
-/// the view: the heading a link or the outline leads to.
+/// What came of drawing a note in Reading view.
+pub struct Read {
+    /// The link or checkbox that was clicked.
+    pub hit: Option<Hit>,
+    /// Each line drawn that folds: where its arrow goes, the line, and
+    /// whether it is folded, as `live::Preview::arrows` has them.
+    pub arrows: Vec<(Rect, Range<usize>, bool)>,
+    /// The folded lines that hid the place `goto` named, which have been
+    /// drawn open to show it and are to stay open.
+    pub unfolded: Vec<String>,
+}
+
+/// Draw `text` rendered, with the lines in `folded` folded (the text of
+/// each line, as `App::folds` keeps them). `goto` is a place in the note, as
+/// a byte offset, to bring to the top of the view: the heading a link or the
+/// outline leads to.
 pub fn show(
     ui: &mut egui::Ui,
     text: &str,
     theme: &Theme,
     exists: &dyn Fn(&str) -> bool,
     goto: Option<usize>,
+    folded: &HashSet<String>,
     embeds: &mut Embeds,
-) -> Option<Hit> {
-    let mut reader = Reader::new(ui, text, theme, exists, embeds);
+) -> Read {
+    let mut reader = Reader::new(ui, text, theme, exists, Some(folded), embeds);
     reader.blocks(ui, goto);
-    reader.hit
+    Read { hit: reader.hit, arrows: reader.arrows, unfolded: reader.unfolded }
 }
 
 /// Draw what `embed` embeds, as Reading view shows it, for the editor to put
 /// under the line that embeds it. Returns the link in it that was clicked.
 pub fn embed(ui: &mut egui::Ui, embed: &Link, theme: &Theme, exists: &dyn Fn(&str) -> bool, embeds: &mut Embeds) -> Option<Hit> {
-    let mut reader = Reader::new(ui, "", theme, exists, embeds);
+    let mut reader = Reader::new(ui, "", theme, exists, None, embeds);
     reader.embed(ui, embed);
+    reader.hit
+}
+
+/// Draw `text`, the lines of one table, as Reading view draws a table.
+pub fn table(ui: &mut egui::Ui, text: &str, theme: &Theme, exists: &dyn Fn(&str) -> bool, embeds: &mut Embeds) -> Option<Hit> {
+    let lines = markdown::parse(text);
+    let mut reader = Reader::new(ui, text, theme, exists, None, embeds);
+    reader.table(ui, &lines);
     reader.hit
 }
 
@@ -62,14 +92,36 @@ struct Reader<'a, 'e> {
     depth: usize,
     /// The ids of the footnotes of this text, in the order of their numbers.
     footnotes: Vec<String>,
+    /// The lines of this text that are folded, if it is the note itself and
+    /// not something the note embeds, which does not fold.
+    folded: Option<&'a HashSet<String>>,
+    /// Folded lines that are drawn open, because what they hide was to be gone to.
+    unfolded: Vec<String>,
+    /// Where the arrows of the lines that fold go, as `Read` hands them on.
+    arrows: Vec<(Rect, Range<usize>, bool)>,
+}
+
+/// Where a run of text was put: its first row and its last, which are one
+/// row if it did not wrap.
+struct Placed {
+    first: Rect,
+    last: Rect,
 }
 
 impl<'a, 'e> Reader<'a, 'e> {
-    fn new(ui: &mut egui::Ui, text: &'a str, theme: &'a Theme, exists: &'a dyn Fn(&str) -> bool, embeds: &'a mut Embeds<'e>) -> Self {
+    fn new(
+        ui: &mut egui::Ui,
+        text: &'a str,
+        theme: &'a Theme,
+        exists: &'a dyn Fn(&str) -> bool,
+        folded: Option<&'a HashSet<String>>,
+        embeds: &'a mut Embeds<'e>,
+    ) -> Self {
         ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
         let body = theme.format(Style::default(), theme.size, theme.text);
         let row = ui.fonts(|f| f.row_height(&body.font_id));
-        Self { text, theme, exists, row, hit: None, embeds, depth: 0, footnotes: Vec::new() }
+        let (unfolded, arrows) = (Vec::new(), Vec::new());
+        Self { text, theme, exists, row, hit: None, embeds, depth: 0, footnotes: Vec::new(), folded, unfolded, arrows }
     }
 }
 
@@ -89,15 +141,50 @@ impl Reader<'_, '_> {
             }
         }
 
+        // What folds. A place to go to that a folded line hides is shown by
+        // opening that fold, as the editor does; but not a footnote listed
+        // at the end, which shows there whatever is folded. Footnotes keep
+        // their numbers, and their place in that list, while what refers to
+        // them is folded away.
+        let folds = match self.folded {
+            Some(_) => outline::folds_in(self.text, &lines),
+            None => Vec::new(),
+        };
+        let listed = |at: usize| {
+            let listed_here = |line: &&Line| matches!(&line.kind, Kind::Footnote(id) if self.footnotes.contains(id));
+            lines.iter().filter(listed_here).any(|line| (line.range.start..=line.range.end).contains(&at))
+        };
+        if let Some(at) = goto.filter(|at| !listed(*at)) {
+            let hides = |fold: &&Fold| self.is_folded(fold) && fold.hidden.start < at && at <= fold.hidden.end;
+            self.unfolded = folds.iter().filter(hides).map(|fold| self.text[fold.line.clone()].to_owned()).collect();
+        }
+        let mut next_fold = 0;
+        // Where what the last folded line drawn hides comes to an end.
+        let mut hidden_to = None;
+
         let mut i = 0;
         // Whether the previous thing drawn was a paragraph gap (or nothing at all).
         let mut gap = true;
         while i < lines.len() {
             let line = &lines[i];
+            // A line at a time, as the editor hides them: a fold can end
+            // inside a block, which then shows from there on.
+            if hidden_to.is_some_and(|end| line.range.end <= end) {
+                i += 1;
+                continue;
+            }
             let block = &lines[i..i + lines[i..].iter().take_while(|l| l.block == line.block).count()];
             i += block.len();
             if goto.is_some_and(|at| (line.block.start..=line.block.end).contains(&at)) {
                 ui.scroll_to_cursor(Some(egui::Align::TOP));
+            }
+            while folds.get(next_fold).is_some_and(|fold| fold.line.start < line.range.start) {
+                next_fold += 1;
+            }
+            let fold = folds.get(next_fold).filter(|fold| fold.line == line.range);
+            let folded = fold.is_some_and(|fold| self.is_folded(fold));
+            if folded {
+                hidden_to = fold.map(|fold| fold.hidden.end);
             }
 
             match &line.kind {
@@ -112,14 +199,23 @@ impl Reader<'_, '_> {
                     if !gap {
                         ui.add_space(theme.size * 0.4);
                     }
+                    let left = ui.cursor().left();
                     let bold = Style { bold: true, ..Style::default() };
-                    self.rich(ui, &line.spans, theme.heading_size(*level), bold, theme.text, None);
+                    let placed = self.rich(ui, &line.spans, theme.heading_size(*level), bold, theme.text, None);
+                    if let Some(fold) = fold {
+                        self.foldable(ui, fold, folded, left, &placed);
+                    }
                 }
                 Kind::Paragraph => self.paragraph(ui, line),
                 // Listed at the end, if anything refers to it.
                 Kind::Footnote(id) if self.footnotes.contains(id) => continue,
                 Kind::Footnote(_) => self.plain(ui, &self.text[line.range.clone()], theme.format(Style::default(), theme.size, theme.muted)),
-                Kind::Bullet | Kind::Numbered | Kind::Task { .. } => self.list_item(ui, line),
+                Kind::Bullet | Kind::Numbered | Kind::Task { .. } => {
+                    let (left, placed) = self.list_item(ui, line);
+                    if let Some(fold) = fold {
+                        self.foldable(ui, fold, folded, left, &placed);
+                    }
+                }
                 Kind::Quote { callout, .. } => self.quote(ui, block, callout.as_deref()),
                 Kind::Rule => {
                     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), row), Sense::hover());
@@ -148,6 +244,22 @@ impl Reader<'_, '_> {
                 self.plain(ui, &format!("{}.", number + 1), theme.format(Style::default(), small, theme.faint));
                 self.rich(ui, &line.spans, small, Style::default(), theme.muted, None);
             });
+        }
+    }
+
+    /// Whether `fold` is folded, here and now.
+    fn is_folded(&self, fold: &Fold) -> bool {
+        let line = &self.text[fold.line.clone()];
+        self.folded.is_some_and(|folded| folded.contains(line)) && !self.unfolded.iter().any(|open| open == line)
+    }
+
+    /// A line that folds, drawn from `left` and `placed` as it is: its arrow
+    /// goes in the margin beside its first row, and if it is folded, dots
+    /// at its end say that there is more.
+    fn foldable(&mut self, ui: &egui::Ui, fold: &Fold, folded: bool, left: f32, placed: &Placed) {
+        self.arrows.push((live::arrow_beside(left, placed.first.y_range()), fold.line.clone(), folded));
+        if folded {
+            live::paint_folded(ui.painter(), placed.last.right_center(), self.theme);
         }
     }
 
@@ -187,6 +299,9 @@ impl Reader<'_, '_> {
                 embeds: &mut *self.embeds,
                 depth: self.depth + 1,
                 footnotes: Vec::new(),
+                folded: None,
+                unfolded: Vec::new(),
+                arrows: Vec::new(),
             };
             inner.blocks(ui, None);
             inner.hit
@@ -204,7 +319,7 @@ impl Reader<'_, '_> {
 
     /// Draw inline content without its syntax, wrapped at `width`, or at
     /// the width there is room for if none is given. Links in it are clickable.
-    fn rich(&mut self, ui: &mut egui::Ui, spans: &[Span], size: f32, base: Style, color: Color32, width: Option<f32>) {
+    fn rich(&mut self, ui: &mut egui::Ui, spans: &[Span], size: f32, base: Style, color: Color32, width: Option<f32>) -> Placed {
         let (mut job, links) = self.compose(spans, size, base, color);
         job.wrap.max_width = width.unwrap_or_else(|| ui.available_width());
 
@@ -222,6 +337,9 @@ impl Reader<'_, '_> {
                 self.hit = Some(Hit::Link((*link).clone()));
             }
         }
+        let first = galley.rows.first().map_or(rect, |row| row.rect.translate(rect.min.to_vec2()));
+        let last = galley.rows.last().map_or(rect, |row| row.rect.translate(rect.min.to_vec2()));
+        Placed { first, last }
     }
 
     /// Inline content without its syntax, ready to be laid out, and the
@@ -295,7 +413,8 @@ impl Reader<'_, '_> {
         let embedded = |span: &Span| matches!(span.link, Some(Link::Embed { .. }));
         let elements: Vec<&Range<usize>> = spans.iter().filter(|span| embedded(span)).map(|span| &span.element).collect();
         if elements.is_empty() {
-            return self.rich(ui, spans, theme.size, Style::default(), theme.text, None);
+            self.rich(ui, spans, theme.size, Style::default(), theme.text, None);
+            return;
         }
         // Text between embeds is drawn only if there is any to see.
         let says_something = |run: &[Span]| run.iter().any(|span| !span.marker && !self.text[span.range.clone()].trim().is_empty());
@@ -320,7 +439,9 @@ impl Reader<'_, '_> {
         }
     }
 
-    fn list_item(&mut self, ui: &mut egui::Ui, line: &Line) {
+    /// A list item, with its bullet, number or checkbox. Returns where the
+    /// bullet starts, and where the item's text was put.
+    fn list_item(&mut self, ui: &mut egui::Ui, line: &Line) -> (f32, Placed) {
         let theme = self.theme;
         // Nesting follows the indentation: a tab or four spaces per level.
         let indent: usize = self.text[line.range.start..line.marker.start]
@@ -330,6 +451,7 @@ impl Reader<'_, '_> {
         let (mut style, mut color) = (Style::default(), theme.text);
         ui.horizontal_top(|ui| {
             ui.add_space(indent as f32 * theme.size * 0.45);
+            let left = ui.cursor().left();
             let slot = vec2(theme.size * 1.1, self.row);
             match &line.kind {
                 Kind::Task { done, checkbox } => {
@@ -352,8 +474,9 @@ impl Reader<'_, '_> {
                     theme.paint_bullet(ui.painter(), rect.center());
                 }
             }
-            self.rich(ui, &line.spans, theme.size, style, color, None);
-        });
+            (left, self.rich(ui, &line.spans, theme.size, style, color, None))
+        })
+        .inner
     }
 
     /// A quote gets an accent bar; a callout its tinted box and title.

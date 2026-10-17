@@ -17,16 +17,22 @@ pub(crate) enum Row {
     Folder { path: PathBuf, depth: usize, notes: usize },
     /// The note `notes[index]`.
     Note { index: usize, depth: usize },
+    /// A file that is not a note, such as a picture, by its path.
+    File { path: PathBuf, depth: usize },
 }
 
 /// Put `notes` in the order the list shows them, and work out its rows: each
 /// folder has its subfolders first, then its notes, both in natural order.
-pub(crate) fn arrange(notes: Vec<Note>, folders: &[PathBuf], vault: &Vault) -> (Vec<Note>, Vec<Row>) {
+pub(crate) fn arrange(notes: Vec<Note>, files: Vec<PathBuf>, folders: &[PathBuf], vault: &Vault) -> (Vec<Note>, Vec<Row>) {
     let mut by_folder: HashMap<PathBuf, Vec<Note>> = HashMap::new();
     for note in notes {
         by_folder.entry(vault.folder_of(&note.path)).or_default().push(note);
     }
-    let mut tree = Tree { folders, by_folder, notes: Vec::new(), rows: Vec::new() };
+    let mut files_in: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for file in files {
+        files_in.entry(vault.folder_of(&file)).or_default().push(file);
+    }
+    let mut tree = Tree { folders, by_folder, files: files_in, notes: Vec::new(), rows: Vec::new() };
     tree.add(Path::new(""), 0);
     // Nothing should be left, but a note is never dropped from the list.
     let mut strays: Vec<Note> = tree.by_folder.drain().flat_map(|(_, notes)| notes).collect();
@@ -41,6 +47,7 @@ pub(crate) fn arrange(notes: Vec<Note>, folders: &[PathBuf], vault: &Vault) -> (
 struct Tree<'a> {
     folders: &'a [PathBuf],
     by_folder: HashMap<PathBuf, Vec<Note>>,
+    files: HashMap<PathBuf, Vec<PathBuf>>,
     notes: Vec<Note>,
     rows: Vec<Row>,
 }
@@ -68,6 +75,10 @@ impl Tree<'_> {
             self.rows.push(Row::Note { index: self.notes.len(), depth });
             self.notes.push(note);
         }
+        // After the notes, and not counted with them.
+        let mut files = self.files.remove(folder).unwrap_or_default();
+        files.sort_by(|a, b| natural_cmp(&name(a), &name(b)));
+        self.rows.extend(files.into_iter().map(|path| Row::File { path, depth }));
         count
     }
 }

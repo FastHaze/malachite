@@ -583,6 +583,36 @@ fn a_new_note_is_named_then_written_without_touching_the_mouse() {
 }
 
 #[test]
+fn a_hidden_title_comes_out_to_be_renamed_and_goes_again() {
+    let mut t = TempApp::new("no-title", &[("A", "a")]);
+    t.frame();
+    let shown = t.0.content_top;
+    t.0.look.show_title = false;
+    t.frame();
+    assert!(t.0.content_top < shown, "the note's text starts higher without its name");
+    t.frame_with(vec![key(egui::Key::F2)]);
+    t.frame();
+    t.frame();
+    t.frame_with(vec![typed("B")]);
+    assert_eq!(t.0.title_buf, "B");
+    t.frame_with(vec![key(egui::Key::Enter)]);
+    t.frame();
+    assert_eq!(t.titles(), ["B"]);
+    assert!(t.0.content_top < shown, "and once renamed it is hidden again");
+}
+
+#[test]
+fn live_preview_draws_a_table_as_a_grid_and_measures_it() {
+    let table = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |";
+    let mut t = TempApp::new("live-table", &[("T", &format!("{table}\nafter"))]);
+    t.0.set_mode(Mode::Live);
+    t.frame();
+    t.frame();
+    let height = *t.0.table_heights.get(table).expect("the grid was drawn and measured");
+    assert!(height > 30.0, "three rows of it: {height}");
+}
+
+#[test]
 fn escape_in_the_title_backs_out_of_a_rename() {
     let mut t = TempApp::new("rename-esc", &[("A", "a")]);
     t.frame();
@@ -965,6 +995,25 @@ fn new_notes_and_folders_start_beside_the_open_note() {
     // The daily note stays at the top level.
     t.0.apply(Action::Daily);
     assert_eq!(t.folder_of(t.0.open.clone().unwrap().as_str()), "");
+}
+
+#[test]
+fn ctrl_n_puts_the_note_where_the_settings_say() {
+    let mut t = TempApp::new("ctrl-n", &[("Projects/Plan", "")]);
+    t.0.apply(Action::Open("Plan".into()));
+    t.0.files.new_notes = files::NewNotes::Top;
+    t.keys(vec![ctrl(egui::Key::N)]);
+    assert_eq!(t.folder_of("Untitled"), "");
+}
+
+#[test]
+fn pictures_are_listed_in_their_folder_after_its_notes() {
+    let mut t = TempApp::new("files-listed", &[("Top", ""), ("Attachments/About", "")]);
+    std::fs::write(t.0.vault.root().join("Attachments").join("Cat.png"), "x").unwrap();
+    t.0.reload().unwrap();
+    t.frame();
+    assert_eq!(t.listed(), ["Attachments", "About", "Cat.png", "Top"]);
+    assert!(t.0.rows.iter().any(|row| matches!(row, Row::Folder { notes: 1, .. })), "a picture is not counted as a note");
 }
 
 #[test]
@@ -1492,7 +1541,7 @@ fn the_vaults_name_in_the_status_bar_answers_the_mouse_as_a_button_does() {
         for clipped in t.frame_full(events).shapes {
             match clipped.shape {
                 egui::Shape::Rect(rect) if rect.rect.contains(at) && rect.rect.width() < width + 4.0 => ground = rect.fill,
-                egui::Shape::Text(text) if text.galley.text() == name => ink = Some(text.fallback_color),
+                egui::Shape::Text(text) if text.galley.text().trim_start() == name => ink = Some(text.fallback_color),
                 _ => {}
             }
         }
@@ -2511,6 +2560,143 @@ fn a_fold_stays_with_its_line_while_the_note_is_edited_elsewhere() {
     assert_eq!(modes.0.buffer, FOLDING);
 }
 
+impl TempApp {
+    /// Each piece of text a frame draws, as it reads. Reading view draws
+    /// every line of a note as a piece of its own.
+    fn texts_drawn(&mut self) -> Vec<String> {
+        let shapes = self.frame_full(Vec::new()).shapes;
+        let text = |shape: &egui::epaint::ClippedShape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            _ => None,
+        };
+        shapes.iter().filter_map(text).collect()
+    }
+}
+
+/// Whether `shapes` hold a fold arrow drawn at `spot`, the middle of where one goes.
+fn arrow_drawn(shapes: &[egui::epaint::ClippedShape], spot: egui::Pos2) -> bool {
+    let arrow = |shape: &egui::epaint::ClippedShape| match &shape.shape {
+        egui::Shape::Path(path) => path.closed && !path.points.is_empty() && path.points.iter().all(|point| point.distance(spot) < 6.0),
+        _ => false,
+    };
+    shapes.iter().any(arrow)
+}
+
+#[test]
+fn a_fold_closed_in_live_preview_stays_closed_in_reading_view() {
+    let mut t = TempApp::new("fold-to-reading", &[("A", FOLDING)]);
+    t.0.set_mode(Mode::Reading);
+    let open = t.fold_arrow("# B").y;
+    assert!(t.texts_drawn().contains(&"two".to_owned()));
+    t.keys(vec![ctrl(egui::Key::E)]);
+    assert!(t.0.mode == Mode::Live);
+    let arrow = t.fold_arrow("# A");
+    t.click(arrow);
+    assert!(t.folded("# A"));
+    t.keys(vec![ctrl(egui::Key::E)]);
+    assert!(t.0.mode == Mode::Reading && t.folded("# A"));
+    let closed = t.fold_arrow("# B").y;
+    assert!(closed < open - 30.0, "what follows has moved up: from {open} to {closed}");
+    let drawn = t.texts_drawn();
+    assert!(!drawn.iter().any(|text| ["one", "two", "three"].contains(&text.as_str())), "what is under # A is not drawn: {drawn:?}");
+    assert!(drawn.contains(&"…".to_owned()), "and the heading ends in dots");
+}
+
+#[test]
+fn clicking_a_fold_arrow_in_reading_view_folds_it() {
+    for (text, line, after) in [(FOLDING, "# A", "# B"), ("- a\n  - b\n  - c\n- d\n  - e", "- a", "- d")] {
+        let mut t = TempApp::new("fold-reading", &[("A", text)]);
+        t.0.set_mode(Mode::Reading);
+        let below = t.fold_arrow(after).y;
+        let arrow = t.fold_arrow(line);
+        t.click(arrow);
+        assert!(t.folded(line) && !t.folded(after), "{line}");
+        let closed = t.fold_arrow(after).y;
+        assert!(closed < below - 20.0, "what follows {line} has moved up: from {below} to {closed}");
+        t.click(arrow);
+        assert!(!t.folded(line));
+        assert_eq!(t.fold_arrow(after).y, below, "and back down");
+        assert!(t.0.buffer == text && !t.0.dirty, "folding does not touch the note");
+        assert!(t.0.mode == Mode::Reading);
+    }
+}
+
+#[test]
+fn a_fold_closed_in_reading_view_stays_closed_in_live_preview() {
+    let mut t = TempApp::new("fold-from-reading", &[("A", FOLDING)]);
+    let open = t.fold_arrow("# B").y;
+    // With the caret in what is about to be folded.
+    t.focus_editor();
+    t.select(5, 5);
+    t.keys(vec![ctrl(egui::Key::E)]);
+    assert!(t.0.mode == Mode::Reading);
+    let arrow = t.fold_arrow("# A");
+    t.click(arrow);
+    assert!(t.folded("# A"));
+    t.keys(vec![ctrl(egui::Key::E)]);
+    assert!(t.0.mode == Mode::Live && t.folded("# A"));
+    let closed = t.fold_arrow("# B").y;
+    assert!(closed < open - 30.0, "what follows has moved up: from {open} to {closed}");
+    // The caret has been moved out of the fold, as folding in the editor
+    // moves it, so taking up the editor again leaves the fold closed.
+    t.focus_editor();
+    assert!(t.folded("# A"));
+    assert_eq!(t.0.selection, Some(3..3));
+}
+
+#[test]
+fn reading_view_shows_an_arrow_beside_a_folded_line_and_the_line_under_the_mouse() {
+    let mut t = TempApp::new("fold-reading-arrows", &[("A", FOLDING)]);
+    t.0.set_mode(Mode::Reading);
+    let (a, b) = (t.fold_arrow("# A"), t.fold_arrow("# B"));
+    let shapes = t.frame_full(Vec::new()).shapes;
+    assert!(!arrow_drawn(&shapes, a) && !arrow_drawn(&shapes, b), "none while the mouse is not over the note");
+    let shapes = t.frame_full(vec![egui::Event::PointerMoved(b + egui::vec2(200.0, 0.0))]).shapes;
+    assert!(arrow_drawn(&shapes, b) && !arrow_drawn(&shapes, a), "one beside the line the mouse is on");
+
+    t.click(a);
+    let b = t.fold_arrow("# B");
+    let shapes = t.frame_full(vec![egui::Event::PointerMoved(b + egui::vec2(200.0, 0.0))]).shapes;
+    assert!(arrow_drawn(&shapes, a) && arrow_drawn(&shapes, b));
+    let shapes = t.frame_full(vec![egui::Event::PointerMoved(b + egui::vec2(200.0, 100.0))]).shapes;
+    assert!(arrow_drawn(&shapes, a) && !arrow_drawn(&shapes, b), "the folded line keeps its arrow");
+}
+
+#[test]
+fn going_to_a_place_in_reading_view_opens_the_fold_it_is_in() {
+    let (text, _) = note_with_a_far_heading();
+    let mut t = TempApp::new("fold-reading-jump", &[("A", &text)]);
+    t.0.set_mode(Mode::Reading);
+    let arrow = t.fold_arrow("# Top");
+    t.click(arrow);
+    assert!(t.folded("# Top"));
+    let row = t.outline_row("Far away");
+    t.click(row);
+    t.frame();
+    assert!(!t.folded("# Top"), "the fold the heading was in has opened");
+    assert!(t.0.mode == Mode::Reading && t.0.scroll_offset > 0.0, "and the heading has been scrolled to");
+
+    // A footnote is listed at the end of the note whatever is folded, so
+    // going to one opens nothing.
+    let text = "# A\nsee[^1]\n# B\nmore\n\n[^1]: the note";
+    let mut t = TempApp::new("fold-reading-footnote", &[("A", text)]);
+    t.0.set_mode(Mode::Reading);
+    let arrow = t.fold_arrow("# B");
+    t.click(arrow);
+    let ctx = t.1.clone();
+    t.0.on_hit(&ctx, Hit::Link(Link::Footnote("1".into())), &mut Vec::new());
+    t.frame();
+    t.frame();
+    assert!(t.folded("# B"));
+    assert!(t.texts_drawn().contains(&"the note".to_owned()));
+    // Anything else under the folded line opens it.
+    let more = text.find("more").unwrap();
+    t.0.apply(Action::Jump(more..more + 4));
+    t.frame();
+    t.frame();
+    assert!(!t.folded("# B"));
+}
+
 #[test]
 fn the_status_bar_counts_words_and_characters() {
     let mut t = TempApp::new("counts", &[("A", "one two\nthré")]);
@@ -3119,7 +3305,7 @@ fn the_tools_above_the_list_are_pictures_that_make_a_note_a_folder_and_today() {
     let folder = t.spot("New folder");
     t.click(folder);
     t.keys(vec![typed("Research"), key(egui::Key::Enter)]);
-    assert!(t.0.vault.root().join("Projects").join("Research").is_dir());
+    assert!(t.0.vault.root().join("Research").is_dir(), "the tool makes a folder at the top, whatever is open");
     let today = t.spot("Today");
     t.click(today);
     let open = t.0.open.clone().expect("today's note is open");

@@ -10,7 +10,7 @@ use malachite::markdown::Style;
 use crate::commands::COMMANDS;
 use crate::picker::{vault_name, Kind, Picker};
 use crate::theme::Theme;
-use crate::tree::{tool, Icon};
+use crate::tree::{paint_icon, tool, Icon};
 use crate::files::{self, NewNotes};
 use crate::{folders, window, Action, App, Confirm, Focus, Mode};
 
@@ -81,7 +81,11 @@ impl App {
                     flat.weak_bg_fill = egui::Color32::TRANSPARENT;
                     flat.bg_stroke = Stroke::NONE;
                     flat.fg_stroke.color = weak;
-                    ui.add(egui::Button::new(vault_name(root)))
+                    // Room at the start for the picture of a vault, painted over it.
+                    let button = ui.add(egui::Button::new(format!("     {}", vault_name(root))));
+                    let ink = ui.style().interact(&button).fg_stroke.color;
+                    paint_icon(ui.painter(), Icon::Vault, button.rect.left_center() + vec2(11.0, 0.0), ink);
+                    button
                 })
                 .inner;
                 #[cfg(test)]
@@ -171,9 +175,8 @@ impl App {
             // one of the bars the window is moved by.
             window::title_bar(ui);
             ui.horizontal(|ui| {
-                let here = "in the folder of the open note";
                 let new_here = match self.files.new_notes {
-                    NewNotes::Beside => here.to_owned(),
+                    NewNotes::Beside => "in the folder of the open note".to_owned(),
                     NewNotes::Top => "at the top of the vault".to_owned(),
                     NewNotes::Folder => format!("in {}", folders::display(&self.files.new_notes_folder)),
                 };
@@ -190,8 +193,8 @@ impl App {
                 if note.on_hover_text(format!("New note {new_here} (Ctrl+N)")).clicked() {
                     actions.push(Action::New);
                 }
-                if folder.on_hover_text(format!("New folder {here}")).clicked() {
-                    actions.push(Action::NewFolder(self.current_folder()));
+                if folder.on_hover_text("New folder at the top of the vault").clicked() {
+                    actions.push(Action::NewFolder(Default::default()));
                 }
                 if today.on_hover_text("Open today's daily note").clicked() {
                     actions.push(Action::Daily);

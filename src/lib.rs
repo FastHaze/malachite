@@ -104,7 +104,7 @@ impl Vault {
     /// All notes in the vault, sorted by path.
     pub fn notes(&self) -> Result<Vec<Note>> {
         let mut paths = Vec::new();
-        collect(&self.root, &mut paths)?;
+        collect(&self.root, &mut paths, &is_note)?;
         paths.sort();
         paths
             .into_iter()
@@ -115,6 +115,15 @@ impl Vault {
                 Ok(Note { title, path, content })
             })
             .collect()
+    }
+
+    /// The files in the vault that notes can embed but are not notes
+    /// (pictures and the like), sorted by path. Hidden folders are skipped.
+    pub fn attachments(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        collect(&self.root, &mut paths, &|path| is_attachment(&path.to_string_lossy()))?;
+        paths.sort();
+        Ok(paths)
     }
 
     /// The note with this title, or failing that with this alias.
@@ -184,7 +193,7 @@ impl Vault {
     /// Titles of all notes, lowercased.
     fn titles(&self) -> Result<HashSet<String>> {
         let mut paths = Vec::new();
-        collect(&self.root, &mut paths)?;
+        collect(&self.root, &mut paths, &is_note)?;
         Ok(paths.iter().filter_map(|p| p.file_stem()).map(|stem| stem.to_string_lossy().to_lowercase()).collect())
     }
 
@@ -492,15 +501,15 @@ fn collect_named(dir: &Path, name: &str, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect(dir: &Path, out: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let p = entry?.path();
         if p.is_dir() {
             // Apps keep files of their own in hidden folders of a vault; skip hidden dirs.
             if !p.file_name().map_or(false, |n| n.to_string_lossy().starts_with('.')) {
-                collect(&p, out)?;
+                collect(&p, out, keep)?;
             }
-        } else if p.extension().map_or(false, |e| e == "md") {
+        } else if keep(&p) {
             out.push(p);
         }
     }
@@ -586,6 +595,10 @@ pub const PICTURES: [&str; 5] = ["png", "jpg", "jpeg", "gif", "bmp"];
 /// Other files a note may embed. They are known for what they
 /// are, files and not notes, but are not shown.
 const OTHER_ATTACHMENTS: [&str; 12] = ["webp", "svg", "avif", "pdf", "mp3", "wav", "m4a", "ogg", "flac", "mp4", "webm", "mov"];
+
+fn is_note(path: &Path) -> bool {
+    path.extension().map_or(false, |e| e == "md")
+}
 
 fn extension(target: &str) -> Option<String> {
     Path::new(target).extension().map(|extension| extension.to_string_lossy().to_lowercase())
@@ -783,6 +796,8 @@ mod tests {
         assert_eq!(v.0.attachment(".hidden/secret.png"), None);
         assert_eq!(v.0.attachment("../outside.png"), None);
         assert_eq!(v.0.attachment(&root.join("img/dog.png").to_string_lossy()), None, "no paths from outside the vault");
+        fs::write(root.join("img/notes.txt"), "x").unwrap();
+        assert_eq!(v.0.attachments().unwrap(), [root.join("img/deep/Cat.png"), root.join("img/dog.png")], "listed, but not hidden ones or what cannot be embedded");
     }
 
     #[test]

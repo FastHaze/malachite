@@ -38,6 +38,16 @@ pub struct Blocks {
     /// pixels, or for an embedded note no width and the height it was last
     /// drawn at. An embed that is not here is left as its text.
     pub sizes: Rc<HashMap<Link, [f32; 2]>>,
+    /// How tall each table was last drawn, by its text.
+    pub tables: Rc<HashMap<String, f32>>,
+}
+
+/// What is drawn in the room kept under a line.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shown {
+    Embed(Link),
+    /// The table whose lines are these bytes of the note.
+    Table(Range<usize>),
 }
 
 impl Blocks {
@@ -59,7 +69,7 @@ pub struct Room {
     pub row: Rangef,
     /// Where the line's text ends.
     pub text_end: f32,
-    pub embed: Link,
+    pub shown: Shown,
 }
 
 /// Room kept under a line for what it embeds.
@@ -70,7 +80,7 @@ struct Embedded {
     /// How far under the top of the line's row the room starts.
     below: f32,
     height: f32,
-    embed: Link,
+    shown: Shown,
 }
 
 /// Something in the note that reacts to a click.
@@ -112,6 +122,16 @@ pub struct Preview {
     /// The lines in view that fold.
     arrows: Vec<Arrow>,
     embeds: Vec<Embedded>,
+}
+
+/// Where the table that starts at `lines[index]` ends, if one does: a row
+/// with a `|---|` line under it, and every table line that follows.
+fn table_end(lines: &[markdown::Line], index: usize) -> Option<usize> {
+    let is_table = |line: &markdown::Line| matches!(line.kind, Kind::TableRow { .. } | Kind::TableRule);
+    let starts = matches!(lines[index].kind, Kind::TableRow { .. })
+        && matches!(lines.get(index + 1).map(|l| &l.kind), Some(Kind::TableRule))
+        && (index == 0 || !is_table(&lines[index - 1]));
+    starts.then(|| lines[index..].iter().take_while(|l| is_table(l)).last().map_or(lines[index].range.end, |l| l.range.end))
 }
 
 /// Lay out `text` for the editor.
@@ -175,6 +195,23 @@ pub fn build_with(
         while folds.get(next_fold).is_some_and(|fold| fold.line.start < line.range.start) {
             next_fold += 1;
         }
+        // A table the cursor is not in is drawn as a grid, as Reading view
+        // draws it: its first line holds a row open for it, and the rest are
+        // hidden as a closed fold hides its lines.
+        if let Some(end) = table_end(&lines, index).filter(|_| !source) {
+            let table = line.range.start..end;
+            if !touches(&table) {
+                let rows = lines[index..].iter().take_while(|l| matches!(l.kind, Kind::TableRow { .. })).count().max(1);
+                let guess = rows as f32 * (theme.size * 1.4 + 6.0);
+                let height = blocks.tables.get(&text[table.clone()]).copied().unwrap_or(guess);
+                out.push(line.range.clone(), TextFormat { line_height: Some(height + EMBED_GAP), ..theme.hidden() });
+                let hidden = end + usize::from(text.as_bytes().get(end) == Some(&b'\r'));
+                out.push(line.range.end..hidden, theme.hidden());
+                embeds.push(Embedded { at: line.range.start, end: line.range.end, below: 0.0, height, shown: Shown::Table(table) });
+                hidden_to = Some(end);
+                continue;
+            }
+        }
         let active = touches(&line.range);
         let embed = markdown::lone_embed(text, line).filter(|_| !source);
         let embed = embed.and_then(|embed| Some((embed, blocks.height(embed)?)));
@@ -182,7 +219,7 @@ pub fn build_with(
             // All embed: the line's characters only hold the row open.
             let room = TextFormat { line_height: Some(height + EMBED_GAP), ..theme.hidden() };
             out.push(line.range.clone(), room);
-            embeds.push(Embedded { at: line.range.start, end: line.range.end, below: 0.0, height, embed: embed.clone() });
+            embeds.push(Embedded { at: line.range.start, end: line.range.end, below: 0.0, height, shown: Shown::Embed(embed.clone()) });
             continue;
         }
         // The first of the sections this line is about to be given.
@@ -196,8 +233,8 @@ pub fn build_with(
 
         match &line.kind {
             Kind::Blank | Kind::Paragraph => {}
-            // Tables are drawn as grids in Reading view only. While editing they
-            // stay literal, in the monospace font so hand-aligned columns line up.
+            // A table the cursor is in (or any, in Source mode) is literal, in
+            // the monospace font so hand-aligned columns line up.
             Kind::TableRow { .. } => {
                 out.push(line.range.clone(), theme.code(theme.text));
                 continue;
@@ -353,7 +390,7 @@ pub fn build_with(
                     section.format.line_height = Some(below + height + EMBED_GAP);
                 }
             }
-            embeds.push(Embedded { at: line.range.start, end: line.range.end, below, height, embed: embed.clone() });
+            embeds.push(Embedded { at: line.range.start, end: line.range.end, below, height, shown: Shown::Embed(embed.clone()) });
         }
 
         if let Some(fold) = folds.get(next_fold).filter(|fold| fold.line == line.range) {
@@ -425,6 +462,27 @@ pub fn build_kept(
         preview: preview.clone(),
     });
     (job, preview)
+}
+
+/// Where a caret taken in `old` is in `new`, one edit later. The text field
+/// lays out the text it has just changed with the caret as it was before the
+/// change, which after a Backspace at the end of a line is the start of the
+/// next one: that line then showed its markers for a frame. An edit starts
+/// at the caret, so whatever it changed is taken to start no earlier, and
+/// the caret goes to the end of what it put in.
+pub fn follow(old: &str, new: &str, caret: &Range<usize>) -> Range<usize> {
+    let head = &old.as_bytes()[..caret.start.min(old.len())];
+    let mut start = head.iter().zip(new.as_bytes()).take_while(|(a, b)| a == b).count();
+    while !new.is_char_boundary(start) {
+        start -= 1;
+    }
+    let room = old.len().min(new.len()) - start;
+    let tail = old.bytes().rev().zip(new.bytes().rev()).take(room).take_while(|(a, b)| a == b).count();
+    let mut end = new.len() - tail;
+    while !new.is_char_boundary(end) {
+        end += 1;
+    }
+    end..end
 }
 
 /// Whether a link leads somewhere that exists. Only note links can dangle.
@@ -517,11 +575,7 @@ impl Preview {
                     let rect = Rect::from_x_y_ranges(width.expand(8.0), top.top()..=bottom.bottom());
                     fills.push(Shape::rect_filled(rect, 4.0, *color));
                 }
-                Decoration::Folded(at) => {
-                    let end = edge(*at);
-                    let dots = pos2(end.right() + 6.0, end.center().y);
-                    painter.text(dots, egui::Align2::LEFT_CENTER, "…", egui::FontId::proportional(theme.size), theme.faint);
-                }
+                Decoration::Folded(at) => paint_folded(painter, edge(*at).right_center(), theme),
             }
         }
         for (range, color) in marks {
@@ -556,8 +610,7 @@ impl Preview {
     pub fn arrows(&self, galley: &Galley, origin: Pos2, offsets: &Offsets) -> Vec<(Rect, Range<usize>, bool)> {
         let place = |arrow: &Arrow| {
             let start = galley.pos_from_ccursor(CCursor::new(offsets.char_at(arrow.at))).translate(origin.to_vec2());
-            let rect = Rect::from_x_y_ranges(start.left() - ARROW_ROOM..=start.left() - 2.0, start.y_range());
-            (rect, arrow.line.clone(), arrow.folded)
+            (arrow_beside(start.left(), start.y_range()), arrow.line.clone(), arrow.folded)
         };
         self.arrows.iter().map(place).collect()
     }
@@ -572,7 +625,7 @@ impl Preview {
                 height: kept.height,
                 row: Rangef::new(row.top(), row.bottom()),
                 text_end: edge(kept.end).right(),
-                embed: kept.embed.clone(),
+                shown: kept.shown.clone(),
             }
         };
         self.embeds.iter().map(place).collect()
@@ -594,6 +647,19 @@ impl Preview {
 
 /// How much of the margin beside a line its fold arrow takes.
 const ARROW_ROOM: f32 = 16.0;
+
+/// Where the arrow that folds a line goes: in the margin before `left`,
+/// where the line starts, as tall as `row`, the line's first row. Reading
+/// view puts its arrows in the same place.
+pub fn arrow_beside(left: f32, row: Rangef) -> Rect {
+    Rect::from_x_y_ranges(left - ARROW_ROOM..=left - 2.0, row)
+}
+
+/// Draw the dots that end a folded line, which ends at `end`.
+pub fn paint_folded(painter: &egui::Painter, end: Pos2, theme: &Theme) {
+    let dots = pos2(end.x + 6.0, end.y);
+    painter.text(dots, egui::Align2::LEFT_CENTER, "…", egui::FontId::proportional(theme.size), theme.faint);
+}
 
 /// Draw a fold arrow in `rect`: pointing at the line while its fold is
 /// closed, and down at what is under it while that is showing.
@@ -655,6 +721,17 @@ impl Offsets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_caret_follows_an_edit_made_at_it() {
+        // Backspace at the end of an item: the caret stays on that line.
+        assert_eq!(follow("- a\n- b", "- \n- b", &(3..3)), 2..2);
+        // Delete before a run of the same letter, and typing into one.
+        assert_eq!(follow("aab", "ab", &(1..1)), 1..1);
+        assert_eq!(follow("aa", "aaa", &(1..1)), 2..2);
+        // A selection typed over, in letters wider than a byte.
+        assert_eq!(follow("ая б", "аx б", &(2..4)), 3..3);
+    }
 
     fn build_at(text: &str, cursor: Option<usize>) -> (LayoutJob, Preview) {
         let cursor = cursor.map(|c| c..c);
@@ -808,7 +885,7 @@ mod tests {
         let theme = Theme::new(true, false);
         let text = "before\n![[pic.png|100]]\nsee ![[pic.png]] here\n![[Unknown]]";
         let picture = Link::Embed { target: "pic.png".into(), place: None, width: Some(100) };
-        let blocks = Blocks { width: 500.0, sizes: Rc::new(HashMap::from([(picture.clone(), [400.0, 200.0])])) };
+        let blocks = Blocks { width: 500.0, sizes: Rc::new(HashMap::from([(picture.clone(), [400.0, 200.0])])), ..Blocks::default() };
         let build = |cursor: Option<usize>, source| {
             let cursor = cursor.map(|c| c..c);
             build_with(text, cursor.as_ref(), source, &theme, &|_| true, &HashSet::new(), &blocks)
@@ -819,7 +896,7 @@ mod tests {
         assert_eq!(format(&job, 8).line_height, Some(50.0 + EMBED_GAP));
         assert_eq!(preview.embeds.len(), 1, "an embed in a sentence, or one with nothing to show, is left as text");
         assert_eq!((preview.embeds[0].at, preview.embeds[0].below, preview.embeds[0].height), (7, 0.0, 50.0));
-        assert_eq!(preview.embeds[0].embed, picture);
+        assert_eq!(preview.embeds[0].shown, Shown::Embed(picture));
         // On the line: the syntax shows, at the top of a row with the picture's room below it.
         let (job, preview) = build(Some(10), false);
         assert!(!hidden(&job, 8));
@@ -827,6 +904,24 @@ mod tests {
         assert!(preview.embeds[0].below > 0.0);
         // Source mode shows the note as it is written.
         assert!(build(Some(0), true).1.embeds.is_empty());
+    }
+
+    #[test]
+    fn a_table_away_from_the_cursor_is_one_row_held_open_for_its_grid() {
+        let theme = Theme::new(true, false);
+        let text = "before\n| a | b |\n|---|---|\n| 1 | 2 |\nafter";
+        let table = 7..text.len() - 6;
+        let blocks = Blocks { tables: Rc::new(HashMap::from([(text[table.clone()].to_owned(), 80.0)])), ..Blocks::default() };
+        let build = |cursor: usize, source| build_with(text, Some(&(cursor..cursor)), source, &theme, &|_| true, &HashSet::new(), &blocks);
+        let (job, preview) = build(0, false);
+        assert_eq!(format(&job, 8).line_height, Some(80.0 + EMBED_GAP), "as tall as the grid was drawn");
+        assert!(hidden(&job, 8) && hidden(&job, 20) && hidden(&job, 30), "every line of it hidden");
+        assert!(!hidden(&job, text.len() - 2), "and the text after it not");
+        assert_eq!(preview.embeds.len(), 1);
+        assert_eq!(preview.embeds[0].shown, Shown::Table(table));
+        // The cursor in any line of it, or Source mode, shows the lines as written.
+        assert!(build(30, false).1.embeds.is_empty() && !hidden(&build(30, false).0, 8));
+        assert!(build(0, true).1.embeds.is_empty());
     }
 
     #[test]

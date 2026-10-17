@@ -13,7 +13,8 @@
 //! command palette and the quick switcher. `find.rs` is find and replace in
 //! the open note; searching all notes is the note list's (`tree.rs`).
 //! What a note is made of, its headings and what folds, is worked out in the
-//! library's `outline`; the outline is drawn in `panels.rs`, folds in `live.rs`.
+//! library's `outline`; the outline is drawn in `panels.rs`, folds in `live.rs`
+//! and `reading.rs`.
 //! `graph.rs` is the graph view, which takes the note's place while it is up.
 
 // No console window behind the GUI in release builds.
@@ -45,7 +46,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use appearance::Appearance;
 use autoscroll::{Autoscroll, Wheel};
 use commands::{Command, EditFn, Run};
@@ -159,6 +160,8 @@ enum Action {
     Open(String),
     /// Open the note in this file: what a row of the note list stands for.
     OpenAt(PathBuf),
+    /// Open a file that is not a note in the program the system has for it.
+    OpenFile(PathBuf),
     /// Follow a `[[wikilink]]`: open the note, creating it if it does not
     /// exist yet, and go to the heading or block in it that the link names.
     Follow(String, Option<Place>),
@@ -335,6 +338,8 @@ struct App {
     /// tall each embedded note was when the editor last drew it (see `embed.rs`).
     pictures: HashMap<String, embed::Kept>,
     embed_heights: HashMap<Link, f32>,
+    /// How tall each table of the open note was drawn in Live Preview, by its text.
+    table_heights: HashMap<String, f32>,
     /// The find bar, while it is up; and where what it looks for is in the
     /// note, with which of those places is the current one.
     find: Option<find::Find>,
@@ -489,6 +494,7 @@ impl App {
             layout: None,
             pictures: HashMap::new(),
             embed_heights: HashMap::new(),
+            table_heights: HashMap::new(),
             find: None,
             graph_find: None,
             graph_look: None,
@@ -574,7 +580,7 @@ impl App {
         }
         let vault = Vault::open(&root)?;
         let folders = vault.folders()?;
-        let (notes, rows) = folders::arrange(vault.notes()?, &folders, &vault);
+        let (notes, rows) = folders::arrange(vault.notes()?, vault.attachments()?, &folders, &vault);
 
         // Nothing of the old vault applies to the new one, its settings
         // included, which are written first if they have been changed.
@@ -596,6 +602,7 @@ impl App {
         self.folds.clear();
         self.pictures.clear();
         self.embed_heights.clear();
+        self.table_heights.clear();
         self.back.clear();
         self.forward.clear();
         self.filter.clear();
@@ -624,7 +631,7 @@ impl App {
     /// Read the notes and folders from disk again.
     fn reload(&mut self) -> Result<()> {
         let folders = self.vault.folders()?;
-        let (notes, rows) = folders::arrange(self.vault.notes()?, &folders, &self.vault);
+        let (notes, rows) = folders::arrange(self.vault.notes()?, self.vault.attachments()?, &folders, &self.vault);
         self.notes = notes;
         self.folders = folders;
         self.rows = rows;
@@ -1041,6 +1048,7 @@ impl App {
                 self.open_note(&title);
                 Ok(())
             }
+            Action::OpenFile(path) => settings_dialog::open_outside(&path, false).with_context(|| format!("could not open {}", path.display())),
             Action::OpenAt(path) => {
                 self.open_at(&path);
                 Ok(())
@@ -1232,7 +1240,9 @@ impl App {
         for action in actions {
             self.apply(action);
         }
-        let waiting = self.pending_edit.is_some() || self.pending_insert.is_some() || self.jump.is_some() || self.caret.is_some();
+        // A caret to put somewhere waits for the editor, which Reading view does not show.
+        let parked = self.caret.is_some() && self.mode != Mode::Reading;
+        let waiting = self.pending_edit.is_some() || self.pending_insert.is_some() || self.jump.is_some() || parked;
         if self.focus.is_some() || waiting {
             // Something is waiting for the next frame: do not wait for the mouse to move.
             ctx.request_repaint();

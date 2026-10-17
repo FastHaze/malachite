@@ -15,13 +15,26 @@ fixes things.
 - "Collapse others" in a folder's right-click menu.
 - Each folder in the note list shows how many notes are in it.
 - Folders are moved by dragging them, as notes are.
+- Folding in Reading view: headings and lists fold there as in the editor,
+  with the same arrows, and what is folded in one view is folded in the
+  others.
+- Tables are drawn as grids in Live Preview, as in Reading view; putting the
+  cursor in one shows it as typed.
+- Pictures and other files that notes can embed are listed in the note list,
+  in their folders; a click opens one in the system's program for it.
+- A setting to hide the note's name above it (Appearance, "Note title").
 
 ### Changed
 - Folded folders are remembered for each vault between runs.
 - The vault's name in the status bar shows that it is a button: it lights up
-  under the mouse and looks pressed while held down.
+  under the mouse and looks pressed while held down, and has a picture of a
+  vault in front of it.
+- The new-folder tool above the note list makes the folder at the top of the
+  vault, whatever note is open.
 
 ### Fixed
+- Ctrl+N puts the new note where the settings say, as the new-note tool does,
+  not always beside the open note.
 - Renaming or moving a folder that the vault's settings name, or one with
   such a folder in it, changes those settings to where it is now: the
   templates folder, the daily notes' folder and template, and the folder for

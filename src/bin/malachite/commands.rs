@@ -109,7 +109,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         app.toggle_graph();
         Ok(())
     }),
-    app("file-explorer:new-file", "Create new note", on(CTRL, Key::N), |app| app.create_in(&app.current_folder(), None)),
+    app("file-explorer:new-file", "Create new note", on(CTRL, Key::N), |app| app.create_in(&app.new_note_folder(), None)),
     app("file-explorer:new-folder", "Create new folder", None, |app| app.new_folder(&app.current_folder())),
     app("file-explorer:collapse-all", "Collapse all folders", None, |app| {
         app.fold_folders(true);
