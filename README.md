@@ -14,6 +14,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT licence"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/editor.png" alt="A note in Live Preview, with the note list on the left and its outline, links and backlinks on the right">
+</p>
+
 ---
 
 Malachite works on a **vault**: an ordinary folder of `.md` files, linked to one
@@ -61,6 +65,16 @@ in [`vault/Overview.md`](vault/Overview.md).
 
 Some things are left out on purpose: math, Mermaid diagrams, pictures from the
 web, and embedded PDF, audio and video.
+
+## Screenshots
+
+The graph of the sample vault:
+
+![The 3D graph of the sample vault](docs/screenshots/graph.png)
+
+The three themes, Gem, Obsidian and Aperture, each in its dark and light scheme:
+
+![The same note in each theme and scheme](docs/screenshots/themes.png)
 
 ## Install
 
