@@ -29,7 +29,10 @@ pub(crate) struct Index {
 /// What the side panel and the status bar show of a note.
 pub(crate) struct Digest {
     /// The text this was read from.
-    text: String,
+    pub text: String,
+    /// Its lines, parsed, and what of it folds: Reading view draws from these.
+    pub lines: Vec<markdown::Line>,
+    pub folds: Vec<outline::Fold>,
     pub headings: Vec<Heading>,
     /// The notes it links to, each once, in order of name.
     pub links: Vec<String>,
@@ -78,6 +81,7 @@ impl Digest {
             return digest.clone();
         }
         let text = text.to_owned();
+        let lines = markdown::parse(&text);
         let mut links = wikilinks(&text);
         links.sort();
         links.dedup();
@@ -86,7 +90,9 @@ impl Digest {
             links,
             tags: tags(&text),
             aliases: aliases(&text),
-            embeds: markdown::parse(&text).iter().filter_map(|line| markdown::lone_embed(&text, line).cloned()).collect(),
+            embeds: lines.iter().filter_map(|line| markdown::lone_embed(&text, line).cloned()).collect(),
+            folds: outline::folds_in(&text, &lines),
+            lines,
             words: text.split_whitespace().count(),
             characters: text.chars().count(),
             text,

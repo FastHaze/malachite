@@ -105,6 +105,18 @@ enum Decoration {
     Folded(usize),
 }
 
+impl Decoration {
+    /// The text it is drawn over or beside.
+    fn text(&self) -> Range<usize> {
+        match self {
+            Decoration::Bullet(at) | Decoration::Rule(at) | Decoration::Folded(at) => *at..*at + 1,
+            Decoration::Checkbox { range, .. } => range.clone(),
+            Decoration::QuoteBar { at, line } => *at..line.end,
+            Decoration::Background { block, .. } => block.clone(),
+        }
+    }
+}
+
 /// A line that can be folded, for the arrow beside it.
 struct Arrow {
     /// Where the line's text starts, after any indentation.
@@ -555,8 +567,16 @@ impl Preview {
             pos2((a.left() + right) / 2.0, a.center().y)
         };
 
+        // Only what is in sight: finding where a place in the text is drawn
+        // goes through the rows from the top, and a long note has a thousand
+        // bullets, or a search of it a thousand matches.
+        let clip = painter.clip_rect();
+        let byte_at_height = |y: f32| offsets.byte_at(galley.cursor_from_pos(egui::vec2(0.0, y - origin.y)).ccursor.index);
+        let (from, to) = (byte_at_height(clip.top()), byte_at_height(clip.bottom()));
+        let in_sight = |range: &Range<usize>| range.end >= from && range.start <= to;
+
         let mut fills = Vec::new();
-        for decoration in &self.decorations {
+        for decoration in self.decorations.iter().filter(|decoration| in_sight(&decoration.text())) {
             match decoration {
                 Decoration::Bullet(at) => theme.paint_bullet(painter, middle(*at..at + 1)),
                 Decoration::Checkbox { range, done } => {
@@ -578,7 +598,7 @@ impl Preview {
                 Decoration::Folded(at) => paint_folded(painter, edge(*at).right_center(), theme),
             }
         }
-        for (range, color) in marks {
+        for (range, color) in marks.iter().filter(|(range, _)| in_sight(range)) {
             let (start, end) = (edge(range.start), edge(range.end));
             let mut fill = |x: std::ops::RangeInclusive<f32>, y: Rangef| {
                 fills.push(Shape::rect_filled(Rect::from_x_y_ranges(x, y), 2.0, *color));

@@ -22,7 +22,7 @@ use crate::{reading, Action, App, Focus, Mode};
 /// The colours the note's right-click menu offers for a highlight. The
 /// first is the yellow of a plain `==highlight==`, the rest six colours
 /// to go with it, in the order of the rainbow.
-const HIGHLIGHTS: [(&str, Highlighter, [u8; 3]); 7] = [
+pub(crate) const HIGHLIGHTS: [(&str, Highlighter, [u8; 3]); 7] = [
     ("Yellow", Highlighter::Yellow, [255, 208, 0]),
     ("Red", Highlighter::Color([233, 49, 71]), [233, 49, 71]),
     ("Orange", Highlighter::Color([236, 117, 0]), [236, 117, 0]),
@@ -46,6 +46,10 @@ const GUTTER: f32 = 12.0;
 impl App {
     pub(crate) fn editor(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let theme = self.theme(ctx);
+        // Drawings are only made in Reading view.
+        if self.mode != Mode::Reading || self.open.is_none() {
+            self.ink.on = false;
+        }
         // The note sits on its own shade, a page among the panels.
         let page = egui::Frame::central_panel(&ctx.style()).fill(theme.page);
         egui::CentralPanel::default().frame(page).show(ctx, |ui| {
@@ -65,10 +69,6 @@ impl App {
             };
             self.header(ui, Some(&open), actions);
             ui.separator();
-            if self.mode == Mode::Reading {
-                // Find works on the note's source, which is not what is showing.
-                self.find = None;
-            }
             self.find_bar(ui, actions);
 
             // What a link can call a note: its title, or one of its aliases.
@@ -124,16 +124,23 @@ impl App {
                             self.pending_edit = None;
                             self.pending_insert = None;
                             let goto = self.jump.take().map(|range| range.start);
+                            let note = self.digest();
                             let nothing = HashSet::new();
                             let folded = self.folds.get(&file).unwrap_or(&nothing);
                             let mut embeds = Embeds { pictures: &mut self.pictures, vault: &self.vault, notes: &self.notes, version: self.version, scanned: self.scanned };
-                            let read = reading::show(ui, &self.buffer, &theme, &exists, goto, folded, &mut embeds);
+                            // Kept for the highlighters' strokes, which go under the text.
+                            let under = ui.painter().add(egui::Shape::Noop);
+                            let marks = self.marks.iter().filter(|range| range.end <= self.buffer.len()).enumerate();
+                            let marks: Vec<_> = marks.map(|(index, range)| (range.clone(), theme.find_mark(index == self.mark))).collect();
+                            let read = reading::show(ui, &note, &theme, &exists, goto, folded, &marks, &mut embeds);
                             if let Some(folded) = self.folds.get_mut(&file) {
                                 folded.retain(|line| !read.unfolded.contains(line));
                             }
                             let id = ui.make_persistent_id(("reading", &file));
                             self.fold_arrows(ui, id, read.arrows, &theme);
-                            read.hit
+                            // Over the text, so that while drawing a press on it draws.
+                            self.ink_layer(ui, &file, &read.blocks, &theme, under);
+                            read.hit.filter(|_| !self.drawing())
                         }
                         mode => self.edit(ui, &file, mode == Mode::Source, rest, &theme, &exists),
                     }
@@ -147,6 +154,7 @@ impl App {
             if let Some(hit) = scrolled.inner {
                 self.on_hit(ctx, hit, actions);
             }
+            self.ink_tools(ctx, view, &theme);
         });
     }
 

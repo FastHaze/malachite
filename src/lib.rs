@@ -14,6 +14,7 @@
 pub mod editing;
 pub mod graph;
 pub mod highlight;
+pub mod ink;
 pub mod markdown;
 pub mod outline;
 mod recycle;
@@ -245,6 +246,7 @@ impl Vault {
         }
         fs::create_dir_all(&dir)?;
         fs::rename(note, &dest)?;
+        carry(self.ink_file(note), self.ink_file(&dest));
         Ok(dest)
     }
 
@@ -275,6 +277,7 @@ impl Vault {
             bail!("there is already a folder called '{name}' there");
         }
         fs::rename(from, self.root.join(&renamed))?;
+        carry(self.ink_dir(folder), self.ink_dir(&renamed));
         Ok(renamed)
     }
 
@@ -297,6 +300,7 @@ impl Vault {
         }
         fs::create_dir_all(&dir)?;
         fs::rename(from, dir.join(name))?;
+        carry(self.ink_dir(folder), self.ink_dir(&moved));
         Ok(moved)
     }
 
@@ -314,6 +318,7 @@ impl Vault {
             n += 1;
         }
         fs::rename(from, &dest)?;
+        carry(self.ink_dir(folder), self.ink_dir(dest.strip_prefix(&self.root).unwrap_or(&dest)));
         Ok(dest)
     }
 
@@ -360,7 +365,8 @@ impl Vault {
     pub fn rename(&self, from: &str, to: &str) -> Result<(String, String, usize)> {
         let notes = self.notes()?;
         let found = notes.iter().position(|n| n.title.eq_ignore_ascii_case(from));
-        rename_in(&notes, found.with_context(|| format!("no note titled '{from}'"))?, to, true)
+        let index = found.with_context(|| format!("no note titled '{from}'"))?;
+        self.renamed(&notes[index].path, rename_in(&notes, index, to, true)?)
     }
 
     /// Like [`Self::rename`], for the note in the file `path`. Notes in
@@ -370,13 +376,21 @@ impl Vault {
     pub fn rename_at(&self, path: &Path, to: &str, relink: bool) -> Result<(String, String, usize)> {
         let notes = self.notes()?;
         let found = notes.iter().position(|n| n.path == path);
-        rename_in(&notes, found.with_context(|| format!("no note at '{}'", path.display()))?, to, relink)
+        let index = found.with_context(|| format!("no note at '{}'", path.display()))?;
+        self.renamed(path, rename_in(&notes, index, to, relink)?)
+    }
+
+    /// What `rename_in` gave back, once the drawings of the note at `path` are carried over to its new name.
+    fn renamed(&self, path: &Path, renamed: (String, String, usize)) -> Result<(String, String, usize)> {
+        carry(self.ink_file(path), self.ink_file(&path.with_file_name(format!("{}.md", renamed.1))));
+        Ok(renamed)
     }
 
     /// Permanently delete a note.
     pub fn delete(&self, title: &str) -> Result<Note> {
         let n = self.find(title)?;
         fs::remove_file(&n.path)?;
+        let _ = fs::remove_file(self.ink_file(&n.path));
         Ok(n)
     }
 
@@ -398,6 +412,9 @@ impl Vault {
             Discard::System => recycle::recycle(path)?,
             _ => fs::remove_file(path)?,
         }
+        // The drawings go where the note went; failing that, they are left where they were.
+        let ink = self.ink_file(path);
+        let _ = if how == Discard::System && ink.exists() { recycle::recycle(&ink) } else { fs::remove_file(&ink).map_err(Into::into) };
         Ok(None)
     }
 
@@ -413,6 +430,8 @@ impl Vault {
             Discard::System => recycle::recycle(&dir)?,
             _ => fs::remove_dir_all(&dir)?,
         }
+        let ink = self.ink_dir(folder);
+        let _ = if how == Discard::System && ink.exists() { recycle::recycle(&ink) } else { fs::remove_dir_all(&ink).map_err(Into::into) };
         Ok(None)
     }
 
@@ -426,7 +445,57 @@ impl Vault {
         fs::create_dir_all(&dir)?;
         let dest = unique_path(&dir, &title.to_string_lossy());
         fs::rename(path, &dest)?;
+        carry(self.ink_file(path), self.ink_file(&dest));
         Ok(dest)
+    }
+
+    /// The file that keeps the drawings over the note in the file `note`
+    /// (see `ink`): its path in the vault, under `.malachite/ink`, ending in
+    /// `.ink`. A note in the `.trash` folder has its drawings under
+    /// `.malachite/ink/.trash`.
+    pub fn ink_file(&self, note: &Path) -> PathBuf {
+        // Never outside the vault: a path that is not in it keeps only its name.
+        let relative = note.strip_prefix(&self.root).ok().or_else(|| note.file_name().map(Path::new)).unwrap_or(Path::new("note"));
+        self.ink_dir(relative).with_extension("ink")
+    }
+
+    /// Where the drawings of the notes in `folder` (relative to the root) are kept.
+    fn ink_dir(&self, folder: &Path) -> PathBuf {
+        self.root.join(".malachite").join("ink").join(folder)
+    }
+
+    /// The drawings over the note in the file `note`: none, if it has no file of them.
+    pub fn read_ink(&self, note: &Path) -> Result<Vec<ink::Stroke>> {
+        match fs::read_to_string(self.ink_file(note)) {
+            Ok(file) => Ok(ink::read(&file)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e).with_context(|| format!("reading the drawings of {}", note.display())),
+        }
+    }
+
+    /// Keep `strokes` as the drawings over the note in the file `note`. With
+    /// none left, the file goes.
+    pub fn write_ink(&self, note: &Path, strokes: &[ink::Stroke]) -> Result<()> {
+        let file = self.ink_file(note);
+        if strokes.is_empty() {
+            return match fs::remove_file(&file) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+                _ => Ok(()),
+            };
+        }
+        fs::create_dir_all(file.parent().unwrap_or(&self.root))?;
+        fs::write(&file, ink::write(strokes)).with_context(|| format!("writing {}", file.display()))
+    }
+}
+
+/// Move the drawings of a note or folder from `from` to `to`, after the note
+/// or folder itself has moved. That has been done, so this does not fail: if
+/// they cannot be moved, or something is already at `to` (which is never
+/// overwritten), they stay where they were.
+fn carry(from: PathBuf, to: PathBuf) {
+    if from.exists() && !to.exists() {
+        let _ = to.parent().map(fs::create_dir_all);
+        let _ = fs::rename(from, to);
     }
 }
 
@@ -700,6 +769,64 @@ mod tests {
 
     fn titles(v: &Vault) -> Vec<String> {
         v.notes().unwrap().into_iter().map(|n| n.title).collect()
+    }
+
+    fn a_stroke() -> Vec<ink::Stroke> {
+        vec![ink::Stroke { anchor: "Text".into(), nth: 0, tool: ink::Tool::Pen, color: [0, 0, 0, 255], width: 2.0, points: vec![[1.0, 2.0]], text: String::new() }]
+    }
+
+    #[test]
+    fn drawings_are_kept_beside_the_vault_and_go_with_none_left() {
+        let v = TempVault::new("ink-kept");
+        let note = v.0.create_in(Path::new("Folder"), Some("Drawn"), "Text\n", &[]).unwrap();
+        assert!(v.0.read_ink(&note.path).unwrap().is_empty());
+        v.0.write_ink(&note.path, &a_stroke()).unwrap();
+        assert_eq!(v.0.ink_file(&note.path), v.0.root().join(".malachite/ink/Folder/Drawn.ink"));
+        assert_eq!(v.0.read_ink(&note.path).unwrap(), a_stroke());
+        // The note list does not show them.
+        assert_eq!(titles(&v.0), ["Drawn"]);
+        v.0.write_ink(&note.path, &[]).unwrap();
+        assert!(!v.0.ink_file(&note.path).exists());
+    }
+
+    #[test]
+    fn drawings_follow_their_note_when_it_is_renamed_moved_or_trashed() {
+        let v = TempVault::new("ink-follow");
+        let note = v.0.create(Some("Drawn"), "Text\n", &[]).unwrap();
+        v.0.write_ink(&note.path, &a_stroke()).unwrap();
+        v.0.rename_at(&note.path, "Renamed", true).unwrap();
+        let renamed = v.0.root().join("Renamed.md");
+        assert_eq!(v.0.read_ink(&renamed).unwrap(), a_stroke());
+        let moved = v.0.move_note(&renamed, Path::new("Inner")).unwrap();
+        assert_eq!(v.0.read_ink(&moved).unwrap(), a_stroke());
+        let folder = v.0.move_folder(Path::new("Inner"), Path::new("Outer")).unwrap();
+        let moved = v.0.root().join(&folder).join("Renamed.md");
+        assert_eq!(v.0.read_ink(&moved).unwrap(), a_stroke());
+        let trashed = v.0.trash_at(&moved).unwrap();
+        assert_eq!(v.0.read_ink(&trashed).unwrap(), a_stroke());
+        assert!(!v.0.ink_file(&moved).exists());
+    }
+
+    #[test]
+    fn drawings_never_overwrite_others_when_carried() {
+        let v = TempVault::new("ink-no-overwrite");
+        let note = v.0.create(Some("Drawn"), "Text\n", &[]).unwrap();
+        v.0.write_ink(&note.path, &a_stroke()).unwrap();
+        // Left over from a note that was deleted outside the app.
+        let other = vec![ink::Stroke { width: 9.0, ..a_stroke().remove(0) }];
+        v.0.write_ink(&v.0.root().join("Other.md"), &other).unwrap();
+        v.0.rename_at(&note.path, "Other", true).unwrap();
+        assert_eq!(v.0.read_ink(&v.0.root().join("Other.md")).unwrap(), other);
+        assert_eq!(v.0.read_ink(&note.path).unwrap(), a_stroke());
+    }
+
+    #[test]
+    fn deleting_a_note_for_good_deletes_its_drawings() {
+        let v = TempVault::new("ink-delete");
+        let note = v.0.create(Some("Drawn"), "Text\n", &[]).unwrap();
+        v.0.write_ink(&note.path, &a_stroke()).unwrap();
+        v.0.discard_at(&note.path, Discard::Delete).unwrap();
+        assert!(!v.0.ink_file(&note.path).exists());
     }
 
     #[test]

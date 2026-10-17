@@ -72,15 +72,14 @@ impl App {
                 // path is a hover away, and the other vaults a click.
                 let root = self.vault.root();
                 let hint = format!("Vault folder: {}\nClick to open another vault.", root.display());
-                // A button that lies flat in the bar, its name as quiet as
-                // the count beside it, until the mouse comes to it: then it
-                // has the ground and edge of any button, and is pressed in.
+                // A button that lies flat in the bar, in the colour of the
+                // bar's other buttons (zoom, settings), until the mouse comes
+                // to it: then it has the ground and edge of any button, and
+                // is pressed in.
                 let vault = ui.scope(|ui| {
-                    let weak = ui.visuals().weak_text_color();
                     let flat = &mut ui.visuals_mut().widgets.inactive;
                     flat.weak_bg_fill = egui::Color32::TRANSPARENT;
                     flat.bg_stroke = Stroke::NONE;
-                    flat.fg_stroke.color = weak;
                     // Room at the start for the picture of a vault, painted over it.
                     let button = ui.add(egui::Button::new(format!("     {}", vault_name(root))));
                     let ink = ui.style().interact(&button).fg_stroke.color;
@@ -269,8 +268,7 @@ impl App {
 
     /// Right-hand panel: the outline of a note, and its outgoing links,
     /// backlinks and tags. The note is the open one, or the one the graph has
-    /// in focus: a click there looks at a note without opening it, and this
-    /// is where there is something to see of it.
+    /// in focus, which is opened behind the graph (`graph_view`).
     pub(crate) fn note_info(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let looked_at = self.graph_focus();
         let Some(title) = looked_at.map(|note| self.notes[note].title.clone()).or_else(|| self.open.clone()) else { return };

@@ -8,6 +8,29 @@ fixes things.
 
 ## [Unreleased]
 
+### Added
+- Drawing over a note in Reading view: a round button at the top right of
+  the note turns it on, with a pen, a highlighter, lines and arrows
+  (straight, or curved and bent by a handle), rectangles, ellipses, text,
+  numbered badges, an eraser, a laser pointer whose trail fades away, a
+  selection to move, recolour, delete or bring to front what is drawn,
+  colours, widths, and undo and redo, with a key for each (P, H, L, A, R, O,
+  T, N, E, V, 1–8, [ and ], C to clear). The note is dimmed while drawing. A
+  mark stays with the line under it, ticked or not, and folds away with it.
+  Drawings are kept in `.malachite/ink` in the vault, never in the note, and
+  follow the note when it is renamed, moved or deleted.
+
+### Changed
+- Long notes take less work to show: Reading view no longer reads the note
+  again at every move of the mouse, and Live Preview and the find bar no
+  longer work on matches and bullets out of sight.
+- Find (Ctrl+F) and replace work in Reading view, marking the matches there and
+  going from one to the next, instead of turning to the editing view.
+- Choosing a note in the graph also opens it, behind the graph, so it is the
+  note edited when the graph is put away, not the one open before.
+- The vault's name in the status bar is the colour of the bar's other
+  buttons (zoom and settings), not the dimmer colour of the note count.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added

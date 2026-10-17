@@ -1304,9 +1304,9 @@ impl App {
     }
 
     /// The note the graph has in focus, by its place in `notes`, while the
-    /// graph is what is showing. A first click on a note in the graph looks
-    /// at it without opening it, and this is how the side panel knows which
-    /// note is being looked at.
+    /// graph is what is showing. A first click on a note in the graph opens
+    /// it behind the graph, and this is how the side panel knows which note
+    /// is being looked at.
     pub(crate) fn graph_focus(&self) -> Option<usize> {
         let focused = self.graph.as_ref().filter(|_| self.show_graph)?.focused_path()?;
         // By its file, not its number: the graph may be a change of the notes behind.
@@ -1349,6 +1349,12 @@ impl App {
                 Some(Outcome::Close) => self.show_graph = false,
                 Some(Outcome::StopSearching) => self.graph_find = None,
                 None => {}
+            }
+            // The note in focus is the open one, so it is the one edited when the graph is put away.
+            if let Some(path) = graph.focused_path().filter(|path| self.open_path.as_ref() != Some(*path)).cloned() {
+                self.open_at(&path);
+                // Opening a note puts the graph away; this one is only being looked at.
+                self.show_graph = true;
             }
             let window_in_front = ctx.input(|input| input.focused);
             let pace = graph.frames_per_second(now, window_in_front);

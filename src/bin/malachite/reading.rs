@@ -14,6 +14,10 @@
 //! dots. Where the arrows go is handed back for the editor's code to draw
 //! and click, so that both views fold alike. A note embedded in another is
 //! drawn whole.
+//!
+//! What the find bar finds is marked here too, behind the text, by where it
+//! is in the note's source: each piece of text drawn is a piece of the
+//! source, so the marks go to the pieces they cover (`marked`).
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -24,8 +28,9 @@ use eframe::egui::text_selection::LabelSelectionState;
 use eframe::egui::{self, vec2, Color32, CursorIcon, Galley, Margin, Rect, Sense, Stroke, TextFormat};
 use malachite::highlight::highlight;
 use malachite::markdown::{self, Kind, Line, Link, Span, Style};
-use malachite::outline::{self, Fold};
+use malachite::outline::Fold;
 
+use crate::cache::Digest;
 use crate::embed::{fit, Embeds};
 use crate::live::{self, char_at, resolved, Hit};
 use crate::theme::Theme;
@@ -44,24 +49,35 @@ pub struct Read {
     /// The folded lines that hid the place `goto` named, which have been
     /// drawn open to show it and are to stay open.
     pub unfolded: Vec<String>,
+    /// Each block of the note drawn, top to bottom: its lines, from the start
+    /// of the first to the end of the last, and the rows it took. A drawing
+    /// over the note is placed by these (`ink.rs`); what a closed fold hides
+    /// is not among them.
+    pub blocks: Vec<(Range<usize>, egui::Rangef)>,
 }
 
-/// Draw `text` rendered, with the lines in `folded` folded (the text of
+/// Draw the note `note` is the digest of, rendered, from the lines and
+/// folds kept in it, since it is drawn every frame: with the lines in `folded` folded (the text of
 /// each line, as `App::folds` keeps them). `goto` is a place in the note, as
 /// a byte offset, to bring to the top of the view: the heading a link or the
-/// outline leads to.
+/// outline leads to. `marks` are parts of the text to fill in behind, each in
+/// its colour, in the order they come in the text: what find has found.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
-    text: &str,
+    note: &Digest,
     theme: &Theme,
     exists: &dyn Fn(&str) -> bool,
     goto: Option<usize>,
     folded: &HashSet<String>,
+    marks: &[(Range<usize>, Color32)],
     embeds: &mut Embeds,
 ) -> Read {
-    let mut reader = Reader::new(ui, text, theme, exists, Some(folded), embeds);
+    let mut reader = Reader::new(ui, &note.text, theme, exists, Some(folded), embeds);
+    reader.marks = marks;
+    reader.parsed = Some((&note.lines, &note.folds));
     reader.blocks(ui, goto);
-    Read { hit: reader.hit, arrows: reader.arrows, unfolded: reader.unfolded }
+    Read { hit: reader.hit, arrows: reader.arrows, unfolded: reader.unfolded, blocks: reader.drawn }
 }
 
 /// Draw what `embed` embeds, as Reading view shows it, for the editor to put
@@ -99,6 +115,13 @@ struct Reader<'a, 'e> {
     unfolded: Vec<String>,
     /// Where the arrows of the lines that fold go, as `Read` hands them on.
     arrows: Vec<(Rect, Range<usize>, bool)>,
+    /// Where the blocks of the note itself were drawn, as `Read::blocks` has them.
+    drawn: Vec<(Range<usize>, egui::Rangef)>,
+    /// Parts of this text to fill in behind, as `show` has them.
+    marks: &'a [(Range<usize>, Color32)],
+    /// The text's lines and folds, if they were parsed already; an embedded
+    /// note's are not, and it does not fold.
+    parsed: Option<(&'a [Line], &'a [Fold])>,
 }
 
 /// Where a run of text was put: its first row and its last, which are one
@@ -121,7 +144,8 @@ impl<'a, 'e> Reader<'a, 'e> {
         let body = theme.format(Style::default(), theme.size, theme.text);
         let row = ui.fonts(|f| f.row_height(&body.font_id));
         let (unfolded, arrows) = (Vec::new(), Vec::new());
-        Self { text, theme, exists, row, hit: None, embeds, depth: 0, footnotes: Vec::new(), folded, unfolded, arrows }
+        let drawn = Vec::new();
+        Self { text, theme, exists, row, hit: None, embeds, depth: 0, footnotes: Vec::new(), folded, unfolded, arrows, drawn, marks: &[], parsed: None }
     }
 }
 
@@ -129,7 +153,14 @@ impl Reader<'_, '_> {
     /// Draw the text, block after block.
     fn blocks(&mut self, ui: &mut egui::Ui, goto: Option<usize>) {
         let (theme, row) = (self.theme, self.row);
-        let lines = markdown::parse(self.text);
+        let parsed;
+        let (lines, folds): (&[Line], &[Fold]) = match self.parsed {
+            Some(kept) => kept,
+            None => {
+                parsed = markdown::parse(self.text);
+                (&parsed, &[])
+            }
+        };
         // Footnotes get their numbers in the order they are first referred
         // to; one that nothing refers to, or that is not defined, has none.
         let defined = |id: &str| lines.iter().any(|line| matches!(&line.kind, Kind::Footnote(defined) if defined == id));
@@ -146,10 +177,7 @@ impl Reader<'_, '_> {
         // at the end, which shows there whatever is folded. Footnotes keep
         // their numbers, and their place in that list, while what refers to
         // them is folded away.
-        let folds = match self.folded {
-            Some(_) => outline::folds_in(self.text, &lines),
-            None => Vec::new(),
-        };
+        let folds = if self.folded.is_some() { folds } else { &[] };
         let listed = |at: usize| {
             let listed_here = |line: &&Line| matches!(&line.kind, Kind::Footnote(id) if self.footnotes.contains(id));
             lines.iter().filter(listed_here).any(|line| (line.range.start..=line.range.end).contains(&at))
@@ -186,6 +214,7 @@ impl Reader<'_, '_> {
             if folded {
                 hidden_to = fold.map(|fold| fold.hidden.end);
             }
+            let top = ui.cursor().top();
 
             match &line.kind {
                 Kind::Blank => {
@@ -224,6 +253,11 @@ impl Reader<'_, '_> {
                 Kind::Fence { .. } | Kind::Code => self.code_block(ui, block),
                 Kind::FrontmatterFence | Kind::Frontmatter => self.properties(ui, block),
                 Kind::TableRow { .. } | Kind::TableRule => self.table(ui, block),
+            }
+            // Only the note's own blocks, which is the text that folds.
+            if self.folded.is_some() {
+                let range = line.range.start..block.last().map_or(line.range.end, |last| last.range.end);
+                self.drawn.push((range, egui::Rangef::new(top, ui.cursor().top())));
             }
             gap = false;
         }
@@ -302,6 +336,10 @@ impl Reader<'_, '_> {
                 folded: None,
                 unfolded: Vec::new(),
                 arrows: Vec::new(),
+                drawn: Vec::new(),
+                // What is found is in the note, not in what it embeds.
+                marks: &[],
+                parsed: None,
             };
             inner.blocks(ui, None);
             inner.hit
@@ -351,6 +389,7 @@ impl Reader<'_, '_> {
         let mut chars = 0;
         for span in spans.iter().filter(|s| !s.marker && !s.style.comment) {
             let mut piece = std::borrow::Cow::Borrowed(&self.text[span.range.clone()]);
+            let mut from = Some(span.range.start);
             let mut style = span.style;
             style.bold |= base.bold;
             style.strike |= base.strike;
@@ -365,13 +404,18 @@ impl Reader<'_, '_> {
                 if let Some(number) = number {
                     piece = std::borrow::Cow::Owned((number + 1).to_string());
                     format.valign = egui::Align::TOP;
+                    // Not the text of the note, so nothing found is in it.
+                    from = None;
                 }
             }
             let len = piece.chars().count();
             if let Some(link) = &span.link {
                 links.push((chars..chars + len, link));
             }
-            job.append(&piece, 0.0, format);
+            match from {
+                Some(from) => marked(&mut job, &piece, from, format, self.marks),
+                None => job.append(&piece, 0.0, format),
+            }
             chars += len;
         }
         if job.sections.is_empty() {
@@ -523,17 +567,26 @@ impl Reader<'_, '_> {
         let theme = self.theme;
         let language = block.first().map_or("", |fence| markdown::fence_language(&self.text[fence.range.clone()]));
         let mut code = block.iter().filter(|l| l.kind == Kind::Code);
-        let range = code.next().map(|first| first.range.start..code.last().unwrap_or(first).range.end);
-        let code = range.map_or(String::new(), |r| self.text[r].replace('\r', ""));
+        let range = code.next().map_or(0..0, |first| first.range.start..code.last().unwrap_or(first).range.end);
+        let code = self.text[range.clone()].replace('\r', "");
+        // What is found, as places in the code, which has no carriage returns.
+        let source: Vec<usize> = self.text[range.clone()].bytes().enumerate().filter(|(_, b)| *b != b'\r').map(|(i, _)| range.start + i).collect();
+        let in_code = |at: usize| source.partition_point(|&s| s < at);
+        let marks: Vec<(Range<usize>, Color32)> = self
+            .marks
+            .iter()
+            .filter(|(r, _)| r.start < range.end && r.end > range.start)
+            .map(|(r, colour)| (in_code(r.start)..in_code(r.end), *colour))
+            .collect();
 
         let mut job = LayoutJob::default();
         let mut at = 0;
         for (range, token) in highlight(language, &code) {
-            job.append(&code[at..range.start], 0.0, theme.code_token(None));
-            job.append(&code[range.clone()], 0.0, theme.code_token(Some(token)));
+            marked(&mut job, &code[at..range.start], at, theme.code_token(None), &marks);
+            marked(&mut job, &code[range.clone()], range.start, theme.code_token(Some(token)), &marks);
             at = range.end;
         }
-        job.append(&code[at..], 0.0, theme.code_token(None));
+        marked(&mut job, &code[at..], at, theme.code_token(None), &marks);
 
         egui::Frame::new().fill(theme.code_bg).corner_radius(4.0).inner_margin(Margin::same(12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -550,7 +603,9 @@ impl Reader<'_, '_> {
             let bold = Style { bold: true, ..Style::default() };
             self.plain(ui, "Properties", theme.format(bold, theme.size * 0.875, theme.muted));
             for line in block.iter().filter(|l| l.kind == Kind::Frontmatter) {
-                self.plain(ui, &self.text[line.range.clone()], theme.code(theme.muted));
+                let mut job = LayoutJob::default();
+                marked(&mut job, &self.text[line.range.clone()], line.range.start, theme.code(theme.muted), self.marks);
+                self.draw(ui, job);
             }
         });
     }
@@ -601,6 +656,28 @@ impl Reader<'_, '_> {
     }
 }
 
+/// Append `piece`, which is the text from the byte `from` on, in `format`,
+/// with what `marks` covers of it filled in behind in the mark's colour.
+/// `marks` are in order and do not overlap, as find gives them.
+fn marked(job: &mut LayoutJob, piece: &str, from: usize, format: TextFormat, marks: &[(Range<usize>, Color32)]) {
+    let end = from + piece.len();
+    let mut at = from;
+    let first = marks.partition_point(|(range, _)| range.end <= from);
+    for (range, colour) in marks[first..].iter().take_while(|(range, _)| range.start < end) {
+        let (start, stop) = (range.start.max(at), range.end.min(end));
+        if start > at {
+            job.append(&piece[at - from..start - from], 0.0, format.clone());
+        }
+        if stop > start {
+            job.append(&piece[start - from..stop - from], 0.0, TextFormat { background: *colour, ..format.clone() });
+        }
+        at = at.max(stop);
+    }
+    if at < end || piece.is_empty() {
+        job.append(&piece[at - from..], 0.0, format);
+    }
+}
+
 /// The space between the cells of a table.
 const TABLE_SPACING: egui::Vec2 = vec2(24.0, 6.0);
 
@@ -635,7 +712,17 @@ fn fit_columns(wanted: &[f32], room: f32) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::fit_columns;
+    use super::*;
+
+    #[test]
+    fn what_is_found_is_marked_behind_the_pieces_it_covers() {
+        let (red, blue) = (Color32::RED, Color32::BLUE);
+        let mut job = LayoutJob::default();
+        // The piece is the text from byte 10 on; a mark starts before it, one is inside, one is after.
+        marked(&mut job, "abcdefgh", 10, TextFormat::default(), &[(5..12, red), (14..16, blue), (30..31, red)]);
+        let pieces: Vec<(&str, Color32)> = job.sections.iter().map(|s| (&job.text[s.byte_range.clone()], s.format.background)).collect();
+        assert_eq!(pieces, [("ab", red), ("cd", Color32::TRANSPARENT), ("ef", blue), ("gh", Color32::TRANSPARENT)]);
+    }
 
     #[test]
     fn a_table_that_fits_keeps_its_columns() {

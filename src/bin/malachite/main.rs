@@ -31,6 +31,7 @@ mod files;
 mod find;
 mod folders;
 mod graph;
+mod ink;
 mod live;
 mod panels;
 mod picker;
@@ -338,6 +339,8 @@ struct App {
     /// tall each embedded note was when the editor last drew it (see `embed.rs`).
     pictures: HashMap<String, embed::Kept>,
     embed_heights: HashMap<Link, f32>,
+    /// The tools for drawing over a note, and the open note's drawings.
+    ink: ink::Ink,
     /// How tall each table of the open note was drawn in Live Preview, by its text.
     table_heights: HashMap<String, f32>,
     /// The find bar, while it is up; and where what it looks for is in the
@@ -494,6 +497,7 @@ impl App {
             layout: None,
             pictures: HashMap::new(),
             embed_heights: HashMap::new(),
+            ink: ink::Ink::default(),
             table_heights: HashMap::new(),
             find: None,
             graph_find: None,
@@ -603,6 +607,7 @@ impl App {
         self.pictures.clear();
         self.embed_heights.clear();
         self.table_heights.clear();
+        self.ink = ink::Ink::default();
         self.back.clear();
         self.forward.clear();
         self.filter.clear();
@@ -1135,7 +1140,14 @@ impl App {
         // editor's to take, when it has the keyboard (see `typing_keys`).
         // The palette and the dialogs keep the keyboard to themselves.
         if self.picker.is_none() && self.confirm.is_none() && !self.show_settings {
-            if let Some(command) = commands::pressed(ctx, |command| matches!(command.run, Run::App(_))) {
+            // Undo and the like are the drawing's only while drawing: otherwise those keys are the editor's.
+            let drawing = self.drawing();
+            // While a text is written over the note, or any field has the keyboard, it has the keys
+            // (letters among them, which choose tools), but for the Esc that finishes the text.
+            let typing = self.typing_ink() || ctx.memory(|memory| memory.focused().is_some());
+            let drawing_takes = |command: &Command| drawing && (!typing || command.id == "ink:stop-drawing");
+            let wanted = |command: &Command| matches!(command.run, Run::App(_)) && (drawing_takes(command) || !commands::only_while_drawing(command));
+            if let Some(command) = commands::pressed(ctx, wanted) {
                 // Now, not with the actions, so that a field which is to take
                 // the keyboard has it before the next key arrives.
                 self.apply(Action::Run(command));

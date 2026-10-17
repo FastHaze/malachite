@@ -22,7 +22,7 @@ use malachite::search::occurrences;
 
 use crate::panels::take_keyboard;
 use crate::picker::rank;
-use crate::{Action, App, Focus, Mode};
+use crate::{Action, App, Focus};
 
 /// The arrows on the buttons for the match before and the match after.
 pub(crate) const PREVIOUS: &str = "⏶";
@@ -40,6 +40,10 @@ pub(crate) struct Find {
     /// The current match is to be chosen again, as the first one from the
     /// caret on: after opening the bar, and when what is looked for changes.
     seek: bool,
+    /// The matches last found, with the text, words and capitals they were
+    /// found for: the bar asks for them several times a frame, and looking
+    /// through a long note takes a millisecond.
+    kept: std::cell::RefCell<Option<(String, String, bool, Vec<Range<usize>>)>>,
 }
 
 /// The most notes the graph's bar finds, as on the site: the graph is to
@@ -173,9 +177,6 @@ impl App {
         if self.open.is_none() {
             return;
         }
-        if self.mode == Mode::Reading {
-            self.mode = self.edit_mode;
-        }
         self.show_graph = false;
         let selected = self.selection.clone().and_then(|selection| self.buffer.get(selection));
         let selected = selected.filter(|text| !text.is_empty() && !text.contains('\n')).map(str::to_owned);
@@ -192,7 +193,16 @@ impl App {
 
     /// Where in the note the text being looked for is.
     pub(crate) fn find_matches(&self) -> Vec<Range<usize>> {
-        self.find.as_ref().map_or_else(Vec::new, |find| occurrences(&self.buffer, &find.query, find.case))
+        let Some(find) = self.find.as_ref() else { return Vec::new() };
+        let mut kept = find.kept.borrow_mut();
+        match kept.as_ref() {
+            Some((text, query, case, found)) if *text == self.buffer && *query == find.query && *case == find.case => found.clone(),
+            _ => {
+                let found = occurrences(&self.buffer, &find.query, find.case);
+                *kept = Some((self.buffer.clone(), find.query.clone(), find.case, found.clone()));
+                found
+            }
+        }
     }
 
     /// Make the match after the current one current, or with `back` the one
@@ -260,7 +270,10 @@ impl App {
             return;
         };
         if std::mem::take(&mut find.seek) {
-            let caret = self.selection.as_ref().map_or(0, |selection| selection.start);
+            // Reading view has no caret: it looks on from the match it is on.
+            let current = find.current;
+            let on = (self.mode == crate::Mode::Reading).then(|| self.find_matches().get(current).map(|range| range.start)).flatten();
+            let caret = on.or_else(|| self.selection.as_ref().map(|selection| selection.start)).unwrap_or(0);
             self.find_from(caret);
         }
         let count = self.find_matches().len();

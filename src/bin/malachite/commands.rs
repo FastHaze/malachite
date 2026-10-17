@@ -48,6 +48,26 @@ const fn app(id: &'static str, name: &'static str, hotkey: Option<KeyboardShortc
     Command { id, name, hotkey, run: Run::App(run) }
 }
 
+/// A drawing tool chosen by its key, as ScreenInk has them.
+macro_rules! tool {
+    ($id:literal, $name:literal, $key:ident, $use:ident) => {
+        app($id, $name, on(Modifiers::NONE, Key::$key), |app| {
+            app.choose_tool(crate::ink::Use::$use);
+            Ok(())
+        })
+    };
+}
+
+/// A drawing colour chosen by its number, from 1.
+macro_rules! colour {
+    ($place:literal, $id:literal, $name:literal, $key:ident) => {
+        app($id, $name, on(Modifiers::NONE, Key::$key), |app| {
+            app.pick_colour($place);
+            Ok(())
+        })
+    };
+}
+
 pub(crate) const COMMANDS: &[Command] = &[
     edit("editor:toggle-bold", "Toggle bold", on(CTRL, Key::B), |t, s| Some(editing::toggle_wrap(t, s, "**"))),
     edit("editor:toggle-italics", "Toggle italic", on(CTRL, Key::I), |t, s| Some(editing::toggle_wrap(t, s, "*"))),
@@ -167,6 +187,64 @@ pub(crate) const COMMANDS: &[Command] = &[
         app.travel(false);
         Ok(())
     }),
+    app("ink:toggle-drawing", "Toggle drawing over the note", None, |app| {
+        app.toggle_drawing();
+        Ok(())
+    }),
+    app("ink:undo", "Undo drawing", on(CTRL, Key::Z), |app| {
+        app.undo_ink(true);
+        Ok(())
+    }),
+    app("ink:redo", "Redo drawing", on(CTRL_SHIFT, Key::Z), |app| {
+        app.undo_ink(false);
+        Ok(())
+    }),
+    app("ink:stop-drawing", "Stop drawing", on(Modifiers::NONE, Key::Escape), |app| {
+        app.escape_drawing();
+        Ok(())
+    }),
+    app("ink:erase-drawings", "Erase all drawings over the note", on(Modifiers::NONE, Key::C), |app| {
+        app.erase_drawings();
+        Ok(())
+    }),
+    tool!("ink:pen", "Drawing: pen", P, Pen),
+    tool!("ink:highlighter", "Drawing: highlighter", H, Highlighter),
+    tool!("ink:line", "Drawing: line", L, Line),
+    tool!("ink:arrow", "Drawing: arrow", A, Arrow),
+    tool!("ink:rectangle", "Drawing: rectangle", R, Rectangle),
+    tool!("ink:ellipse", "Drawing: ellipse", O, Ellipse),
+    tool!("ink:text", "Drawing: text", T, Text),
+    tool!("ink:badge", "Drawing: numbered badge", N, Badge),
+    tool!("ink:eraser", "Drawing: eraser", E, Eraser),
+    tool!("ink:select", "Drawing: select", V, Select),
+    colour!(0, "ink:colour-1", "Drawing: colour 1", Num1),
+    colour!(1, "ink:colour-2", "Drawing: colour 2", Num2),
+    colour!(2, "ink:colour-3", "Drawing: colour 3", Num3),
+    colour!(3, "ink:colour-4", "Drawing: colour 4", Num4),
+    colour!(4, "ink:colour-5", "Drawing: colour 5", Num5),
+    colour!(5, "ink:colour-6", "Drawing: colour 6", Num6),
+    colour!(6, "ink:colour-7", "Drawing: colour 7", Num7),
+    colour!(7, "ink:colour-8", "Drawing: colour 8", Num8),
+    app("ink:thinner", "Drawing: smaller", on(Modifiers::NONE, Key::OpenBracket), |app| {
+        app.ink.width = app.ink.width.saturating_sub(1);
+        Ok(())
+    }),
+    app("ink:thicker", "Drawing: bigger", on(Modifiers::NONE, Key::CloseBracket), |app| {
+        app.ink.width = (app.ink.width + 1).min(2);
+        Ok(())
+    }),
+    app("ink:select-all", "Select all drawings", on(CTRL, Key::A), |app| {
+        app.select_all_ink();
+        Ok(())
+    }),
+    app("ink:delete-selection", "Delete the selected drawings", on(Modifiers::NONE, Key::Delete), |app| {
+        app.delete_selected_ink();
+        Ok(())
+    }),
+    app("ink:bring-to-front", "Bring the selected drawings to front", on(CTRL, Key::CloseBracket), |app| {
+        app.bring_ink_to_front();
+        Ok(())
+    }),
     app("markdown:toggle-preview", "Toggle reading view", on(CTRL, Key::E), |app| {
         app.toggle_reading();
         Ok(())
@@ -184,6 +262,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         Ok(())
     }),
 ];
+
+/// Whether the keys of `command` are only its while drawing over a note:
+/// the rest of the time they are the editor's, or the find bar's, or the
+/// letters they are.
+pub(crate) fn only_while_drawing(command: &Command) -> bool {
+    command.id.starts_with("ink:") && command.id != "ink:toggle-drawing"
+}
 
 /// The command whose hotkey has just been pressed, among those `wanted`. The
 /// key press is used up, so nothing drawn later reacts to it as well.
