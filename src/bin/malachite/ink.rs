@@ -1,7 +1,7 @@
 //! Drawing over a note in Reading view: freehand, shapes, text and badges.
 //!
-//! A round button at the top right of the note turns drawing on and off,
-//! and while it is on the tools hang below it, two to a row: pen and
+//! The Draw button in the bar above the note turns drawing on and off, and
+//! while it is on the tools are a row between that bar and the note: pen and
 //! highlighter, line and arrow (straight or curved), rectangle and ellipse,
 //! text and numbered badges, an eraser, a laser pointer whose trail fades and
 //! is never kept, and a selection, then a colour, a width, undo and redo. The
@@ -84,7 +84,7 @@ impl Use {
     }
 }
 
-/// The tools in the order they are offered, two to a row, and what is said of
+/// The tools in the order they are offered, and what is said of
 /// each under the mouse, with its key (`commands.rs` has them, ScreenInk's);
 /// a test finds each by the words before its key or the colon.
 const TOOLS: [(Use, &str); 12] = [
@@ -102,12 +102,33 @@ const TOOLS: [(Use, &str); 12] = [
     (Use::Select, "Select (V): click or drag round marks, or Ctrl+A for all, to move, recolour (1–8), delete (Delete) or bring to front (Ctrl+]); a line or arrow alone has handles to move its ends and bend it"),
 ];
 
-/// The sizes offered, smallest first, by what they are of: a pen's or a
-/// shape's line, a highlighter's, a text's letters, a badge's radius.
+/// Each tool's smallest, middle and biggest size, by what they are of: a
+/// pen's or a shape's line, a highlighter's, a text's letters, a badge's
+/// radius. The size slider goes from 0 to 2 along them (`sized`).
 const PEN_WIDTHS: [f32; 3] = [2.0, 4.0, 8.0];
 const HIGHLIGHTER_WIDTHS: [f32; 3] = [10.0, 16.0, 26.0];
 const TEXT_SIZES: [f32; 3] = [14.0, 20.0, 32.0];
 const BADGE_RADII: [f32; 3] = [13.0, 18.0, 28.0];
+
+/// The three sizes of the marks `tool` makes.
+fn sizes_of(tool: Tool) -> [f32; 3] {
+    match tool {
+        Tool::Highlighter => HIGHLIGHTER_WIDTHS,
+        Tool::Text => TEXT_SIZES,
+        Tool::Badge => BADGE_RADII,
+        _ => PEN_WIDTHS,
+    }
+}
+
+/// The size at `at` along the slider, from 0 to 2, of a tool whose three
+/// sizes are `sizes`: in a straight line from one to the next, and in tenths,
+/// as the file keeps it, so that what is drawn is what is kept.
+fn sized(sizes: [f32; 3], at: f32) -> f32 {
+    let at = at.clamp(0.0, 2.0);
+    let i = (at as usize).min(1);
+    let size = sizes[i] + (sizes[i + 1] - sizes[i]) * (at - i as f32);
+    (size * 10.0).round() / 10.0
+}
 
 /// How much of the page a highlighter's stroke lets through.
 const SEEN_THROUGH: u8 = 96;
@@ -127,15 +148,19 @@ const PICK_REACH: f32 = 4.0;
 const HANDLE: f32 = 4.5;
 const HANDLE_REACH: f32 = 8.0;
 
-/// The round button's size, and how far it is kept in from the note's corner.
-const BUTTON: f32 = 30.0;
-const INSET: f32 = 26.0;
+/// The size of a tool's button in the strip.
+const SPOT: f32 = 22.0;
 
-/// The colours to draw in: the colour of the text, then the highlight colours.
-fn colours(theme: &Theme) -> Vec<Color32> {
+/// The colours to draw in: the colour of the text, then the highlight
+/// colours, then your own (`App::highlight`, the colour the highlight menu
+/// picked last, which picking one here changes too), at `OWN`.
+fn colours(theme: &Theme, [r, g, b]: [u8; 3]) -> Vec<Color32> {
     let highlights = crate::editor::HIGHLIGHTS.iter().map(|(_, _, [r, g, b])| Color32::from_rgb(*r, *g, *b));
-    std::iter::once(theme.text).chain(highlights).collect()
+    std::iter::once(theme.text).chain(highlights).chain([Color32::from_rgb(r, g, b)]).collect()
 }
+
+/// Where your own colour is among `colours`, after the eight with a key.
+const OWN: usize = 8;
 
 /// The drawing tools, and the drawings of the open note.
 #[derive(Default)]
@@ -143,9 +168,10 @@ pub(crate) struct Ink {
     /// Whether a press on the note draws.
     pub on: bool,
     pub tool: Use,
-    /// Which of `colours` and of the widths, by their place.
+    /// Which of `colours`, by its place.
     pub colour: usize,
-    pub width: usize,
+    /// Where the size slider is, from 0 to 2 (`sized`).
+    pub width: f32,
     /// The note whose drawings these are.
     note: Option<PathBuf>,
     /// Its file of drawings could not be read, so it is not to be written
@@ -157,6 +183,10 @@ pub(crate) struct Ink {
     /// The drawings as they were before each change, latest last.
     undo: Vec<Vec<ink::Stroke>>,
     redo: Vec<Vec<ink::Stroke>>,
+    /// The drawings as they were before the colour picker began recolouring
+    /// what is selected: it does so as it is dragged, and the change becomes
+    /// one step to undo as the pointer lets go, as a move does.
+    recolouring: Option<Vec<ink::Stroke>>,
     /// Where each stroke's line starts in the note's text, if it is still
     /// there, worked out for the text kept with it.
     placed: Option<(String, Vec<Option<usize>>)>,
@@ -410,7 +440,7 @@ impl App {
         if let Err(e) = self.ink.load(&self.vault, file) {
             self.fail(format!("Could not read the drawings over this note: {e:#}"));
         }
-        self.ink.palette = colours(theme);
+        self.ink.palette = colours(theme, self.highlight);
         let left = ui.max_rect().left();
         let painter = ui.painter().clone();
         if self.ink.on {
@@ -477,6 +507,10 @@ impl App {
         // Over everything Reading view has drawn, so that a press here draws.
         let area = ui.clip_rect();
         let response = ui.interact(area, ui.id().with("ink"), Sense::click_and_drag());
+        // A press on the note puts away the colour picker, which only a click would, and a click draws a dot.
+        if response.is_pointer_button_down_on() {
+            ui.memory_mut(|m| m.close_popup());
+        }
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let hit = |app: &App, point: Pos2, reach: f32| {
             (0..app.ink.strokes.len()).rev().find(|&i| {
@@ -577,7 +611,7 @@ impl App {
                     match hit(self, press, PICK_REACH).filter(|&i| self.ink.strokes[i].tool == Tool::Text) {
                         Some(i) => self.write_in(i, placed[i]),
                         None => {
-                            let size = TEXT_SIZES[self.ink.width.min(TEXT_SIZES.len() - 1)];
+                            let size = sized(TEXT_SIZES, self.ink.width);
                             // The click is at the middle of the first line, where the caret shows.
                             let offset = from - vec2(0.0, size * 0.6);
                             let color = self.mark(theme, lines.start, Vec::new(), String::new()).color;
@@ -735,16 +769,10 @@ impl App {
     fn mark(&self, theme: &Theme, at: usize, points: Vec<[f32; 2]>, text: String) -> ink::Stroke {
         let (anchor, nth) = ink::anchor_at(&self.buffer, at);
         let tool = self.ink.tool.tool().unwrap_or(Tool::Pen);
-        let colours = colours(theme);
+        let colours = colours(theme, self.highlight);
         let [r, g, b, _] = colours[self.ink.colour.min(colours.len() - 1)].to_srgba_unmultiplied();
-        let widths = match tool {
-            Tool::Highlighter => HIGHLIGHTER_WIDTHS,
-            Tool::Text => TEXT_SIZES,
-            Tool::Badge => BADGE_RADII,
-            _ => PEN_WIDTHS,
-        };
         let color = [r, g, b, if tool == Tool::Highlighter { SEEN_THROUGH } else { 255 }];
-        ink::Stroke { anchor, nth, tool, color, width: widths[self.ink.width.min(widths.len() - 1)], points, text }
+        ink::Stroke { anchor, nth, tool, color, width: sized(sizes_of(tool), self.ink.width), points, text }
     }
 
     /// Write in the text mark `i` again, whose line starts at the byte `line`.
@@ -899,15 +927,22 @@ impl App {
 
     /// Give the selected marks the colour `colour`, each keeping how much it lets through.
     fn recolour_ink(&mut self, colour: Color32) {
+        let strokes = self.recoloured(colour);
+        if strokes != self.ink.strokes {
+            self.change_ink(strokes);
+        }
+    }
+
+    /// The drawings with what is selected in `colour`, each keeping how much
+    /// it lets through.
+    fn recoloured(&self, colour: Color32) -> Vec<ink::Stroke> {
         let [r, g, b, _] = colour.to_srgba_unmultiplied();
         let mut strokes = self.ink.strokes.clone();
         for &i in &self.ink.selected {
             let a = strokes[i].color[3];
             strokes[i].color = [r, g, b, a];
         }
-        if strokes != self.ink.strokes {
-            self.change_ink(strokes);
-        }
+        strokes
     }
 
     /// The laser: a glowing dot in place of the mouse, and while pressed, a
@@ -1023,36 +1058,13 @@ impl App {
         self.ink.on && self.mode == crate::Mode::Reading && !self.show_graph && self.open.is_some()
     }
 
-    /// The round button at the top right of `view`, the note's part of the
-    /// window, and below it, while drawing is on, the tools.
-    pub(crate) fn ink_tools(&mut self, ctx: &egui::Context, view: Rect, theme: &Theme) {
-        let at = pos2(view.right() - INSET - BUTTON, view.top() + 8.0);
-        let area = egui::Area::new(egui::Id::new("ink tools")).order(egui::Order::Middle).fixed_pos(at);
-        area.show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-            let on = self.drawing();
-            let (rect, button) = ui.allocate_exact_size(vec2(BUTTON, BUTTON), Sense::click());
-            #[cfg(test)]
-            self.spots.insert("Draw", rect);
-            let ground = if on { theme.accent } else if button.hovered() { ui.visuals().widgets.hovered.weak_bg_fill } else { ui.visuals().panel_fill };
-            ui.painter().circle(rect.center(), BUTTON / 2.0, ground, Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color));
-            paint_pen(ui.painter(), rect.center(), if on { theme.page } else { ui.visuals().text_color() });
-            let hint = if on { "Stop drawing" } else { "Draw over this note, in Reading view" };
-            if button.on_hover_text(hint).clicked() {
-                self.toggle_drawing();
-            }
-            if self.drawing() {
-                self.tool_strip(ui, theme);
-            }
-        });
-    }
-
-    /// The tools, two to a row.
-    fn tool_strip(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        let frame = egui::Frame::popup(ui.style()).inner_margin(4.0).corner_radius(BUTTON / 2.0);
-        frame.show(ui, |ui| {
+    /// The tools, as a row above the note that wraps when the window is
+    /// narrow: the header's Draw button shows it, and it takes its room in
+    /// the layout, so it is never drawn over anything else.
+    pub(crate) fn tool_strip(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-            let size = BUTTON - 8.0;
+            let size = SPOT;
             let spot = |ui: &mut egui::Ui, chosen: bool, hint: &str| {
                 let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
                 if chosen || response.hovered() {
@@ -1062,84 +1074,97 @@ impl App {
                 (rect, response.on_hover_text(hint))
             };
             let ink = ui.visuals().text_color();
-            let ground = ui.visuals().panel_fill;
-            for row in TOOLS.chunks(2) {
-                ui.horizontal(|ui| {
-                    for &(tool, hint) in row {
-                        let (rect, response) = spot(ui, self.ink.tool == tool, hint);
-                        #[cfg(test)]
-                        self.spots.insert(hint.split([':', '(']).next().unwrap_or(hint).trim_end(), rect);
-                        paint_tool(ui.painter(), rect.center(), tool, ink, ground);
-                        if response.clicked() {
-                            self.choose_tool(tool);
-                        }
-                    }
-                });
-            }
-            ui.separator();
-            let colours = colours(theme);
-            for (row, chunk) in colours.chunks(2).enumerate() {
-                ui.horizontal(|ui| {
-                    for (j, colour) in chunk.iter().enumerate() {
-                        let i = row * 2 + j;
-                        let (rect, response) = spot(ui, self.ink.colour == i, "Colour (1–8)");
-                        #[cfg(test)]
-                        self.spots.insert(["Colour 1", "Colour 2", "Colour 3", "Colour 4", "Colour 5", "Colour 6", "Colour 7", "Colour 8"][i.min(7)], rect);
-                        ui.painter().circle_filled(rect.center(), 5.5, *colour);
-                        if response.clicked() {
-                            self.pick_colour(i);
-                        }
-                    }
-                });
-            }
-            ui.separator();
-            for (row, chunk) in PEN_WIDTHS.chunks(2).enumerate() {
-                ui.horizontal(|ui| {
-                    for (j, width) in chunk.iter().enumerate() {
-                        let i = row * 2 + j;
-                        let (rect, response) = spot(ui, self.ink.width == i, "Size ([ and ])");
-                        ui.painter().circle_filled(rect.center(), width / 2.0 + 1.0, ink);
-                        if response.clicked() {
-                            self.ink.width = i;
-                        }
-                    }
-                });
-            }
-            if self.ink.tool == Use::Select {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let can = !self.ink.selected.is_empty();
-                    let colour = if can { ink } else { ui.visuals().weak_text_color() };
-                    let (rect, front) = spot(ui, false, "Bring to front (Ctrl+])");
-                    #[cfg(test)]
-                    self.spots.insert("Bring to front", rect);
-                    paint_front(ui.painter(), rect.center(), colour, ground);
-                    let (rect, delete) = spot(ui, false, "Delete (Delete)");
-                    #[cfg(test)]
-                    self.spots.insert("Delete marks", rect);
-                    paint_cross(ui.painter(), rect.center(), colour);
-                    if front.clicked() {
-                        self.bring_ink_to_front();
-                    }
-                    if delete.clicked() {
-                        self.delete_selected_ink();
-                    }
-                });
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                for (back, hint) in [(true, "Undo (Ctrl+Z)"), (false, "Redo (Ctrl+Shift+Z)")] {
-                    let can = if back { self.ink.can_undo() } else { self.ink.can_redo() };
-                    let (rect, response) = spot(ui, false, hint);
-                    #[cfg(test)]
-                    self.spots.insert(if back { "Undo drawing" } else { "Redo drawing" }, rect);
-                    let colour = if can { ink } else { ui.visuals().weak_text_color() };
-                    paint_turn(ui.painter(), rect.center(), back, colour);
-                    if response.clicked() && can {
-                        self.undo_ink(back);
-                    }
+            let ground = theme.page;
+            for &(tool, hint) in &TOOLS {
+                let (rect, response) = spot(ui, self.ink.tool == tool, hint);
+                #[cfg(test)]
+                self.spots.insert(hint.split([':', '(']).next().unwrap_or(hint).trim_end(), rect);
+                paint_tool(ui.painter(), rect.center(), tool, ink, ground);
+                if response.clicked() {
+                    self.choose_tool(tool);
                 }
+            }
+            ui.separator();
+            for (i, colour) in colours(theme, self.highlight).iter().take(OWN).enumerate() {
+                let (rect, response) = spot(ui, self.ink.colour == i, "Colour (1–8)");
+                #[cfg(test)]
+                self.spots.insert(["Colour 1", "Colour 2", "Colour 3", "Colour 4", "Colour 5", "Colour 6", "Colour 7", "Colour 8"][i.min(7)], rect);
+                ui.painter().circle_filled(rect.center(), 5.5, *colour);
+                if response.clicked() {
+                    self.pick_colour(i);
+                }
+            }
+            // Your own colour: a click draws in it and opens the picker to change it.
+            let own = ui.scope(|ui| {
+                ui.spacing_mut().interact_size = vec2(SPOT, SPOT);
+                egui::color_picker::color_edit_button_srgb(ui, &mut self.highlight)
             });
+            let own = own.inner;
+            #[cfg(test)]
+            self.spots.insert("Your colour", own.rect);
+            if self.ink.colour == OWN {
+                ui.painter().rect_stroke(own.rect.expand(2.0), 3.0, Stroke::new(1.5, ui.visuals().selection.bg_fill), egui::StrokeKind::Outside);
+            }
+            if own.clicked() {
+                self.ink.palette = colours(theme, self.highlight);
+                self.pick_colour(OWN);
+            } else if own.changed() {
+                self.ink.palette = colours(theme, self.highlight);
+                self.ink.colour = OWN;
+                if !self.ink.selected.is_empty() {
+                    self.ink.recolouring.get_or_insert_with(|| self.ink.strokes.clone());
+                    let strokes = self.recoloured(self.ink.palette[OWN]);
+                    self.ink.set(strokes);
+                }
+            }
+            if !ui.input(|i| i.pointer.any_down()) {
+                if let Some(before) = self.ink.recolouring.take().filter(|before| *before != self.ink.strokes) {
+                    let after = std::mem::replace(&mut self.ink.strokes, before);
+                    self.change_ink(after);
+                }
+            }
+            own.on_hover_text("Your colour: click to draw in it, and to pick another");
+            ui.separator();
+            let size = ui.add(egui::Slider::new(&mut self.ink.width, 0.0..=2.0).show_value(false));
+            #[cfg(test)]
+            self.spots.insert("Size", size.rect);
+            size.on_hover_text("Size ([ and ])");
+            // The size of what the tool in hand makes, in a room of its own
+            // width, so that a longer number does not move what follows it.
+            let tool = self.ink.tool.tool().unwrap_or(Tool::Pen);
+            let number = egui::Label::new(sized(sizes_of(tool), self.ink.width).to_string()).selectable(false);
+            ui.add_sized(vec2(30.0, SPOT), number).on_hover_text("The size you are drawing at");
+            // Always there, if greyed, so that choosing a tool never changes
+            // how many rows the strip takes and moves the note under the pointer.
+            ui.separator();
+            let can = !self.ink.selected.is_empty();
+            let colour = if can { ink } else { ui.visuals().weak_text_color() };
+            let (rect, front) = spot(ui, false, "Bring to front (Ctrl+])");
+            #[cfg(test)]
+            self.spots.insert("Bring to front", rect);
+            paint_front(ui.painter(), rect.center(), colour, ground);
+            let (rect, delete) = spot(ui, false, "Delete (Delete)");
+            #[cfg(test)]
+            self.spots.insert("Delete marks", rect);
+            paint_cross(ui.painter(), rect.center(), colour);
+            if front.clicked() && can {
+                self.bring_ink_to_front();
+            }
+            if delete.clicked() && can {
+                self.delete_selected_ink();
+            }
+            ui.separator();
+            for (back, hint) in [(true, "Undo (Ctrl+Z)"), (false, "Redo (Ctrl+Shift+Z)")] {
+                let can = if back { self.ink.can_undo() } else { self.ink.can_redo() };
+                let (rect, response) = spot(ui, false, hint);
+                #[cfg(test)]
+                self.spots.insert(if back { "Undo drawing" } else { "Redo drawing" }, rect);
+                let colour = if can { ink } else { ui.visuals().weak_text_color() };
+                paint_turn(ui.painter(), rect.center(), back, colour);
+                if response.clicked() && can {
+                    self.undo_ink(back);
+                }
+            }
             let can = !self.ink.strokes.is_empty();
             let (rect, response) = spot(ui, false, "Erase all the drawings over this note (Ctrl+Z brings them back)");
             #[cfg(test)]
@@ -1149,6 +1174,7 @@ impl App {
                 self.erase_drawings();
             }
         });
+        ui.separator();
     }
 }
 
@@ -1286,5 +1312,14 @@ mod tests {
         paint(&painter, &stroke, &outline(&stroke), Pos2::ZERO, &mut under, Color32::WHITE);
         let [Shape::Path(line)] = &under[..] else { panic!("one line under the text: {under:?}") };
         assert_eq!(line.stroke.color, egui::epaint::ColorMode::Solid(Color32::from_rgb(255, 237, 159)), "the yellow it is over white, with nothing let through");
+    }
+
+    #[test]
+    fn the_size_slider_runs_through_the_three_sizes_in_tenths() {
+        let at = |place| sized(PEN_WIDTHS, place);
+        assert_eq!([at(0.0), at(1.0), at(2.0)], PEN_WIDTHS, "the three sizes are where they were");
+        assert_eq!([at(0.5), at(1.5)], [3.0, 6.0], "and between them, in a straight line");
+        assert_eq!(at(0.33), 2.7, "in tenths, as the file keeps it");
+        assert_eq!([at(-1.0), at(3.0)], [2.0, 8.0], "no smaller than the smallest or bigger than the biggest");
     }
 }

@@ -4055,6 +4055,15 @@ impl TempApp {
         self.click(at);
     }
 
+    /// Turn drawing on with the Draw button, and give back `at` moved to
+    /// where that place on the note is now: the tools take a row above it.
+    fn start_drawing(&mut self, at: egui::Pos2) -> egui::Pos2 {
+        let top = self.0.content_top;
+        self.click_spot("Draw");
+        self.frame();
+        at + egui::vec2(0.0, self.0.content_top - top)
+    }
+
     /// The open note's file of drawings, if it has one.
     fn ink_on_disk(&self) -> Option<String> {
         let note = self.0.open_path.as_ref().expect("a note is open");
@@ -4071,7 +4080,7 @@ fn the_draw_button_turns_to_reading_view_and_a_drag_draws_a_stroke() {
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
     t.0.set_mode(Mode::Live);
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     assert!(t.0.mode == Mode::Reading && t.0.drawing());
     t.drag(row, row + egui::vec2(120.0, 6.0));
     assert_eq!(t.0.ink.strokes.len(), 1);
@@ -4084,11 +4093,30 @@ fn the_draw_button_turns_to_reading_view_and_a_drag_draws_a_stroke() {
 }
 
 #[test]
+fn the_drawing_tools_are_a_row_between_the_bar_and_the_note() {
+    let mut t = TempApp::new("ink-row", &[("Drawn", &format!("{FIRST}\n"))]);
+    t.frame();
+    let top = t.0.content_top;
+    t.start_drawing(egui::Pos2::ZERO);
+    let (draw, pen, erase) = (t.0.spots["Draw"], t.0.spots["Pen"], t.0.spots["Erase drawings"]);
+    assert!(pen.top() > draw.bottom() && erase.bottom() < t.0.content_top, "below the Draw button and above the note");
+    assert!(t.0.content_top > top, "the note makes room for them");
+    let drawing_top = t.0.content_top;
+    t.click_spot("Select");
+    t.frame();
+    assert_eq!(t.0.content_top, drawing_top, "choosing a tool does not move the note");
+    t.click_spot("Draw");
+    t.frame();
+    assert!(!t.0.drawing());
+    assert_eq!(t.0.content_top, top, "and has it back when drawing stops");
+}
+
+#[test]
 fn drawings_are_undone_and_redone_with_the_tools_and_the_keys() {
     let mut t = TempApp::new("ink-undo", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(80.0, 0.0));
     assert_eq!(t.0.ink.strokes.len(), 1);
     t.click_spot("Undo drawing");
@@ -4106,7 +4134,7 @@ fn the_eraser_takes_away_a_stroke_it_passes_over() {
     let mut t = TempApp::new("ink-erase", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(100.0, 0.0));
     t.drag(row + egui::vec2(0.0, 40.0), row + egui::vec2(100.0, 40.0));
     assert_eq!(t.0.ink.strokes.len(), 2);
@@ -4122,7 +4150,7 @@ fn the_laser_pointer_leaves_a_trail_and_no_stroke() {
     let mut t = TempApp::new("ink-laser", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.click_spot("Laser pointer");
     t.drag(row, row + egui::vec2(100.0, 0.0));
     assert!(!t.0.ink.trail.is_empty(), "it leaves a trail");
@@ -4143,7 +4171,7 @@ fn while_drawing_a_link_is_drawn_over_and_not_followed() {
     // The link is at the start of the row: along it, the mouse becomes a hand there.
     let along = (230..450).step_by(4).map(|x| egui::pos2(x as f32, row.y));
     let link = along.into_iter().find(|pos| t.cursor_at(*pos) == egui::CursorIcon::PointingHand).expect("the link is drawn");
-    t.click_spot("Draw");
+    let link = t.start_drawing(link);
     t.click(link);
     assert_eq!(t.0.open.as_deref(), Some("Drawn"));
     assert_eq!(t.0.ink.strokes.len(), 1, "a click makes a dot");
@@ -4169,7 +4197,7 @@ fn a_stroke_over_a_folded_line_is_not_drawn_but_kept() {
     let mut t = TempApp::new("ink-fold", &[("Drawn", &format!("# Heading\n\n{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     // Down to the text under the heading.
     let under = (0..200).step_by(4).map(|dy| row + egui::vec2(0.0, dy as f32)).find(|at| {
         t.drag(*at, *at + egui::vec2(60.0, 0.0));
@@ -4189,11 +4217,23 @@ fn a_stroke_over_a_folded_line_is_not_drawn_but_kept() {
 }
 
 #[test]
+fn a_click_on_a_fold_arrow_while_drawing_draws_and_does_not_fold() {
+    let mut t = TempApp::new("ink-fold-arrow", &[("A", FOLDING)]);
+    t.0.set_mode(Mode::Reading);
+    let arrow = t.fold_arrow("# A");
+    t.start_drawing(arrow);
+    // Where the arrow is now, under the row of tools.
+    let arrow = t.fold_arrow("# A");
+    t.click(arrow);
+    assert!(t.0.drawing() && !t.folded("# A"), "the drawing layer takes the click");
+}
+
+#[test]
 fn lines_arrows_rectangles_and_ellipses_are_dragged_out() {
     let mut t = TempApp::new("ink-shapes", &[("Drawn", &format!("{FIRST}\n\n{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     let kinds = [("Line", malachite::ink::Tool::Line, 2), ("Arrow", malachite::ink::Tool::Arrow, 2), ("Rectangle", malachite::ink::Tool::Rectangle, 2), ("Ellipse", malachite::ink::Tool::Ellipse, 2)];
     for (n, (spot, kind, points)) in kinds.into_iter().enumerate() {
         t.click_spot(spot);
@@ -4213,7 +4253,7 @@ fn badges_are_numbered_one_after_another_and_undo_gives_a_number_back() {
     let mut t = TempApp::new("ink-badges", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.click_spot("Numbered badge");
     t.click(row);
     t.click(row + egui::vec2(60.0, 0.0));
@@ -4229,7 +4269,7 @@ fn a_text_is_written_where_it_is_clicked_and_can_be_written_in_again() {
     let mut t = TempApp::new("ink-text", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.click_spot("Text");
     t.click(row);
     assert!(t.0.typing_ink(), "a field to write in");
@@ -4258,7 +4298,7 @@ fn marks_are_selected_moved_recoloured_brought_to_front_and_deleted() {
     let mut t = TempApp::new("ink-select", &[("Drawn", &format!("{FIRST}\n\n{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(100.0, 0.0));
     t.drag(row + egui::vec2(0.0, 40.0), row + egui::vec2(100.0, 40.0));
     let (first, second) = (t.0.ink.strokes[0].clone(), t.0.ink.strokes[1].clone());
@@ -4292,7 +4332,7 @@ fn the_erase_button_takes_away_every_drawing_and_undo_brings_them_back() {
     let mut t = TempApp::new("ink-erase-all", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(100.0, 0.0));
     t.drag(row + egui::vec2(0.0, 30.0), row + egui::vec2(100.0, 30.0));
     t.click_spot("Erase drawings");
@@ -4308,7 +4348,7 @@ fn ticking_a_task_keeps_what_is_drawn_over_it() {
     let mut t = TempApp::new("ink-tick", &[("Drawn", &format!("{task}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(100.0, 0.0));
     let painted = |t: &mut TempApp| t.frame_full(Vec::new()).shapes.len();
     t.0.buffer = t.0.buffer.replacen("[ ]", "[x]", 1);
@@ -4325,7 +4365,7 @@ fn a_mark_moved_to_another_line_goes_with_that_line() {
     let mut t = TempApp::new("ink-reanchor", &[("Drawn", &format!("{FIRST}\n\n{second}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.drag(row, row + egui::vec2(100.0, 0.0));
     assert_eq!(t.0.ink.strokes[0].anchor, FIRST);
     t.click_spot("Select");
@@ -4344,7 +4384,7 @@ fn a_selected_line_is_bent_by_its_middle_handle_and_a_double_click_straightens_i
     let mut t = TempApp::new("ink-bend", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.click_spot("Line");
     t.drag(row, row + egui::vec2(100.0, 0.0));
     t.click_spot("Select");
@@ -4387,7 +4427,7 @@ fn a_curved_arrow_is_drawn_straight_then_bent_by_the_mouse_until_a_click() {
 "))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     t.click_spot("Curved arrow");
     t.drag(row, row + egui::vec2(100.0, 0.0));
     assert!(t.0.ink.strokes.is_empty(), "not yet kept");
@@ -4422,16 +4462,16 @@ fn screeninks_keys_choose_the_tools_colours_and_sizes_while_drawing() {
     let row = t.text_row();
     t.keys(vec![key(egui::Key::R)]);
     assert_eq!(t.0.ink.tool, Use::Pen, "not while drawing is off");
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     let tools = [(egui::Key::H, Use::Highlighter), (egui::Key::L, Use::Line), (egui::Key::A, Use::Arrow), (egui::Key::R, Use::Rectangle), (egui::Key::O, Use::Ellipse), (egui::Key::T, Use::Text), (egui::Key::N, Use::Badge), (egui::Key::E, Use::Eraser), (egui::Key::V, Use::Select), (egui::Key::P, Use::Pen)];
     for (pressed, tool) in tools {
         t.keys(vec![key(pressed)]);
         assert_eq!(t.0.ink.tool, tool, "{pressed:?}");
     }
     t.keys(vec![key(egui::Key::CloseBracket), key(egui::Key::CloseBracket), key(egui::Key::CloseBracket)]);
-    assert_eq!(t.0.ink.width, 2, "no bigger than the biggest");
+    assert_eq!(t.0.ink.width, 2.0, "no bigger than the biggest");
     t.keys(vec![key(egui::Key::OpenBracket)]);
-    assert_eq!(t.0.ink.width, 1);
+    assert_eq!(t.0.ink.width, 1.0);
     t.keys(vec![key(egui::Key::Num3)]);
     assert_eq!(t.0.ink.colour, 2);
     t.drag(row, row + egui::vec2(100.0, 0.0));
@@ -4455,11 +4495,88 @@ fn screeninks_keys_choose_the_tools_colours_and_sizes_while_drawing() {
 }
 
 #[test]
+fn the_size_slider_gives_a_size_between_the_three_and_leaves_the_keys_to_drawing() {
+    let mut t = TempApp::new("ink-size", &[("Drawn", &format!("{FIRST}\n"))]);
+    t.0.set_mode(Mode::Reading);
+    let row = t.text_row();
+    let row = t.start_drawing(row);
+    let slider = t.0.spots["Size"];
+    t.click(egui::pos2(slider.left() + slider.width() * 0.75, slider.center().y));
+    assert!(t.0.ink.width > 1.0 && t.0.ink.width < 2.0, "three quarters along: {}", t.0.ink.width);
+    t.drag(row, row + egui::vec2(100.0, 0.0));
+    let width = t.0.ink.strokes[0].width;
+    assert!(width > 4.0 && width < 8.0, "between the middle size and the biggest: {width}");
+    // The number beside the slider is the size of what the tool in hand makes.
+    let shown = |t: &mut TempApp| {
+        let slider = t.0.spots["Size"];
+        let beside = |at: &egui::Rect| at.left() >= slider.right() && (at.center().y - slider.center().y).abs() < 6.0;
+        t.texts().into_iter().find(|(_, at)| beside(at)).map(|(text, _)| text)
+    };
+    assert_eq!(shown(&mut t), Some(width.to_string()), "the size it drew at");
+    t.keys(vec![key(egui::Key::OpenBracket)]);
+    assert_eq!(t.0.ink.width, 1.0, "[ goes down to the middle size: the slider has not kept the keyboard");
+    assert_eq!(shown(&mut t).as_deref(), Some("4"));
+    t.keys(vec![key(egui::Key::H)]);
+    assert_eq!(shown(&mut t).as_deref(), Some("16"), "a highlighter's middle size");
+}
+
+#[test]
+fn your_own_colour_is_drawn_in_and_its_button_opens_the_picker() {
+    let mut t = TempApp::new("ink-own", &[("Drawn", &format!("{FIRST}\n"))]);
+    t.0.highlight = [1, 2, 3];
+    t.0.set_mode(Mode::Reading);
+    let row = t.text_row();
+    let row = t.start_drawing(row);
+    t.click_spot("Your colour");
+    assert_eq!(t.0.ink.colour, 8, "the ninth colour, after the eight with a key");
+    assert!(t.1.memory(|m| m.any_popup_open()), "the picker is open");
+    t.drag(row, row + egui::vec2(100.0, 0.0));
+    assert_eq!(t.0.ink.strokes.last().map(|s| s.color), Some([1, 2, 3, 255]), "drawn in the colour the highlight menu keeps");
+    assert!(!t.1.memory(|m| m.any_popup_open()), "a press on the note puts the picker away");
+}
+
+#[test]
+fn what_is_selected_follows_the_colour_picker_and_a_drag_in_it_is_one_step_to_undo() {
+    use egui::PointerButton::Primary;
+    let mut t = TempApp::new("ink-picker", &[("Drawn", &format!("{FIRST}\n"))]);
+    t.0.highlight = [1, 2, 3];
+    t.0.set_mode(Mode::Reading);
+    let row = t.text_row();
+    let row = t.start_drawing(row);
+    t.drag(row, row + egui::vec2(100.0, 0.0));
+    t.click_spot("Select");
+    t.click(row + egui::vec2(50.0, 0.0));
+    assert_eq!(t.0.ink.selected, [0]);
+    t.click_spot("Your colour");
+    assert_eq!(t.0.ink.strokes[0].color, [1, 2, 3, 255], "a click on your colour recolours what is selected");
+    let picker = t.1.memory(|m| {
+        let foreground = m.areas().visible_layer_ids().into_iter().filter(|layer| layer.order == egui::Order::Foreground);
+        foreground.filter_map(|layer| m.area_rect(layer.id)).max_by(|a, b| a.area().total_cmp(&b.area()))
+    });
+    let picker = picker.expect("the picker is open");
+    // A drag across the middle of the picker, where its square of shades is.
+    let (from, to) = (picker.center() - egui::vec2(40.0, 0.0), picker.center() + egui::vec2(40.0, 0.0));
+    t.frame_with(vec![egui::Event::PointerMoved(from)]);
+    t.frame_with(vec![button(Primary, from, true)]);
+    t.frame_with(vec![egui::Event::PointerMoved(to)]);
+    t.frame();
+    let shown = t.0.ink.strokes[0].color;
+    assert_ne!(shown, [1, 2, 3, 255], "the mark follows the picker while it is dragged");
+    assert_eq!(shown, [t.0.highlight[0], t.0.highlight[1], t.0.highlight[2], 255], "in the colour picked");
+    t.frame_with(vec![button(Primary, to, false)]);
+    t.frame();
+    assert_eq!(t.0.ink.strokes[0].color, shown, "and keeps it as the pointer lets go");
+    assert!(t.ink_on_disk().unwrap().contains(&format!("#{:02x}{:02x}{:02x}ff", shown[0], shown[1], shown[2])), "which is written down");
+    t.0.undo_ink(true);
+    assert_eq!(t.0.ink.strokes[0].color, [1, 2, 3, 255], "the whole drag is one step to undo");
+}
+
+#[test]
 fn alt_with_the_pen_draws_as_a_highlighter() {
     let mut t = TempApp::new("ink-alt-pen", &[("Drawn", &format!("{FIRST}\n"))]);
     t.0.set_mode(Mode::Reading);
     let row = t.text_row();
-    t.click_spot("Draw");
+    let row = t.start_drawing(row);
     // A drag with Alt held all the way, which egui reads from each frame's input, not from the events.
     use egui::PointerButton::Primary;
     let to = row + egui::vec2(100.0, 0.0);

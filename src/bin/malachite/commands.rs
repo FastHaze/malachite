@@ -226,11 +226,12 @@ pub(crate) const COMMANDS: &[Command] = &[
     colour!(6, "ink:colour-7", "Drawing: colour 7", Num7),
     colour!(7, "ink:colour-8", "Drawing: colour 8", Num8),
     app("ink:thinner", "Drawing: smaller", on(Modifiers::NONE, Key::OpenBracket), |app| {
-        app.ink.width = app.ink.width.saturating_sub(1);
+        // To the next of the three sizes down, from wherever the slider is.
+        app.ink.width = (app.ink.width.ceil() - 1.0).max(0.0);
         Ok(())
     }),
     app("ink:thicker", "Drawing: bigger", on(Modifiers::NONE, Key::CloseBracket), |app| {
-        app.ink.width = (app.ink.width + 1).min(2);
+        app.ink.width = (app.ink.width.floor() + 1.0).min(2.0);
         Ok(())
     }),
     app("ink:select-all", "Select all drawings", on(CTRL, Key::A), |app| {

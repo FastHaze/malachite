@@ -70,6 +70,10 @@ impl App {
             self.header(ui, Some(&open), actions);
             ui.separator();
             self.find_bar(ui, actions);
+            // Laid out above the note, not over it, so it never covers the panels.
+            if self.drawing() {
+                self.tool_strip(ui, &theme);
+            }
 
             // What a link can call a note: its title, or one of its aliases.
             let index = self.index();
@@ -154,7 +158,6 @@ impl App {
             if let Some(hit) = scrolled.inner {
                 self.on_hit(ctx, hit, actions);
             }
-            self.ink_tools(ctx, view, &theme);
         });
     }
 

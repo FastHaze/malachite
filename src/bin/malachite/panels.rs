@@ -40,8 +40,8 @@ const INFO_WIDTH: std::ops::RangeInclusive<f32> = 150.0..=380.0;
 /// The widths of the bar above the note below which it no longer holds
 /// everything on one row: first the note's place and the Delete button go,
 /// then the view buttons move to a row of their own.
-const HEADER_FULL: f32 = 480.0;
-const HEADER_ROW: f32 = 340.0;
+const HEADER_FULL: f32 = 530.0;
+const HEADER_ROW: f32 = 390.0;
 
 /// The range of widths for a side panel when the other one, if it is
 /// showing, is `other` wide: its usual range, cut down so that the two of
@@ -482,10 +482,26 @@ impl App {
         }
     }
 
-    /// The buttons that choose what is shown of the note: the graph or one of
-    /// its three views. `reversed` is for a layout that runs right to left.
+    /// The button that turns drawing over the note on and off, beside Reading
+    /// view, which is where drawing is done.
+    fn draw_button(&mut self, ui: &mut egui::Ui) {
+        let on = self.drawing();
+        let button = ui.selectable_label(on, "Draw");
+        #[cfg(test)]
+        self.spots.insert("Draw", button.rect);
+        let hint = if on { "Stop drawing (Esc)" } else { "Draw over this note, in Reading view" };
+        if button.on_hover_text(hint).clicked() {
+            self.toggle_drawing();
+        }
+    }
+
+    /// The buttons that choose what is shown of the note: the graph, one of
+    /// its three views, or drawing over it. `reversed` is for a layout that
+    /// runs right to left.
     fn view_buttons(&mut self, ui: &mut egui::Ui, reversed: bool) {
-        if !reversed {
+        if reversed {
+            self.draw_button(ui);
+        } else {
             self.graph_button(ui);
         }
         let modes: Vec<_> = if reversed { MODES.to_vec() } else { MODES.into_iter().rev().collect() };
@@ -496,6 +512,8 @@ impl App {
         }
         if reversed {
             self.graph_button(ui);
+        } else {
+            self.draw_button(ui);
         }
     }
 
