@@ -72,6 +72,10 @@ The graph of the sample vault:
 
 ![The 3D graph of the sample vault](docs/screenshots/graph.png)
 
+Drawing over a note in Reading view, with the tools in a row above it:
+
+![A note drawn over with a pen, an ellipse, a curved arrow, text, a highlighter and numbered badges](docs/screenshots/drawing.png)
+
 Three of the themes, Gem, Obsidian and Aperture, each in its dark and light scheme:
 
 ![The same note in each theme and scheme](docs/screenshots/themes.png)
