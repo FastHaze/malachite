@@ -8,14 +8,18 @@ fixes things.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
 ### Added
-- Drawing over a note in Reading view: a round button at the top right of
-  the note turns it on, with a pen, a highlighter, lines and arrows
+- Drawing over a note in Reading view: the Draw button beside the views in
+  the bar above the note turns it on, and the tools take a row of their own
+  between that bar and the note: a pen, a highlighter, lines and arrows
   (straight, or curved and bent by a handle), rectangles, ellipses, text,
   numbered badges, an eraser, a laser pointer whose trail fades away, a
   selection to move, recolour, delete or bring to front what is drawn,
-  colours, widths, and undo and redo, with a key for each (P, H, L, A, R, O,
-  T, N, E, V, 1–8, [ and ], C to clear). The note is dimmed while drawing. A
+  colours and one of your own, picked as a highlight's is, a slider for
+  the size, and undo and redo, with a key for each (P, H, L, A, R, O, T, N,
+  E, V, 1–8, [ and ], C to clear). The note is dimmed while drawing. A
   mark stays with the line under it, ticked or not, and folds away with it.
   Drawings are kept in `.malachite/ink` in the vault, never in the note, and
   follow the note when it is renamed, moved or deleted.
@@ -112,6 +116,7 @@ The first public release.
 - Windows, macOS (Apple silicon and Intel) and Linux.
 - `malachite-cli` for the terminal.
 
-[Unreleased]: https://github.com/FastHaze/malachite/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/FastHaze/malachite/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/FastHaze/malachite/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FastHaze/malachite/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FastHaze/malachite/releases/tag/v0.1.0

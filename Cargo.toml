@@ -2,7 +2,7 @@
 # The app is Malachite; the package has a longer name because `malachite` on
 # crates.io is another project. The library and the programs keep the short one.
 name = "malachite-notes"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.83"
 description = "A fast, local notes app for a vault of Markdown files, with live preview and a 3D graph of the links between notes"
