@@ -52,7 +52,7 @@ endorsed by Obsidian or Dynalist Inc.
   `line:` and `section:` operators, plus find and replace in a note.
 - **Command palette** (Ctrl+P) and **quick switcher** (Ctrl+O).
 - **Daily notes and templates**, with `{{title}}`, `{{date}}` and `{{time}}`.
-- **Themes**: Gem, Obsidian and Aperture, each with a light and a dark scheme.
+- **Themes**: Gem, Obsidian, Aperture and Cyberpunk, each with a light and a dark scheme.
   Every colour can be changed in a plain settings file.
 - **Light on the machine.** A frame that would draw what the window already
   shows is not drawn, so moving the mouse over a note costs almost nothing.
@@ -72,7 +72,7 @@ The graph of the sample vault:
 
 ![The 3D graph of the sample vault](docs/screenshots/graph.png)
 
-The three themes, Gem, Obsidian and Aperture, each in its dark and light scheme:
+Three of the themes, Gem, Obsidian and Aperture, each in its dark and light scheme:
 
 ![The same note in each theme and scheme](docs/screenshots/themes.png)
 

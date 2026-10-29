@@ -8,6 +8,10 @@ fixes things.
 
 ## [Unreleased]
 
+### Added
+- The Cyberpunk theme: neon yellow and deep teal with a green laser, yellow
+  on the dark of a city at night, and teal on a pale yellow sky by day.
+
 ## [0.3.0] - 2026-10-29
 
 ### Added

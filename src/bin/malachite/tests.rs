@@ -3148,7 +3148,7 @@ fn a_theme_chosen_in_the_dialog_is_the_colour_of_everything() {
     };
     assert_eq!(t.0.look.palette, Palette::Gem, "the app's own, until another is chosen");
     assert_eq!(t.1.style().visuals.panel_fill, color(Palette::Gem, SIDEBAR));
-    for theme in [Palette::Aperture, Palette::Obsidian, Palette::Gem] {
+    for theme in [Palette::Cyberpunk, Palette::Aperture, Palette::Obsidian, Palette::Gem] {
         let card = t.spot(theme.name());
         t.click(card);
         assert_eq!(t.0.look.palette, theme);

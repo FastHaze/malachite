@@ -83,14 +83,17 @@ pub enum Palette {
     /// a pair of portals, the blue one in the light scheme and the orange
     /// one in the dark, each with the other for its highlight.
     Aperture,
+    /// A city at night under a yellow sky: deep teal shadows, the yellow of
+    /// its signs, a green laser and an orange tower.
+    Cyberpunk,
 }
 
 /// The themes there are, as a problem with the file names them.
-const THEMES: &str = "gem, obsidian or aperture";
+const THEMES: &str = "gem, obsidian, aperture or cyberpunk";
 
 impl Palette {
     /// Every theme, in the order the dialog shows them.
-    pub const ALL: [Palette; 3] = [Palette::Gem, Palette::Obsidian, Palette::Aperture];
+    pub const ALL: [Palette; 4] = [Palette::Gem, Palette::Obsidian, Palette::Aperture, Palette::Cyberpunk];
 
     /// The word for it in the file.
     pub fn word(self) -> &'static str {
@@ -98,6 +101,7 @@ impl Palette {
             Palette::Gem => "gem",
             Palette::Obsidian => "obsidian",
             Palette::Aperture => "aperture",
+            Palette::Cyberpunk => "cyberpunk",
         }
     }
 
@@ -107,6 +111,7 @@ impl Palette {
             Palette::Gem => "Gem",
             Palette::Obsidian => "Obsidian",
             Palette::Aperture => "Aperture",
+            Palette::Cyberpunk => "Cyberpunk",
         }
     }
 
@@ -115,6 +120,7 @@ impl Palette {
             Palette::Gem => "Malachite green on the dark of the stone, with a little gold.",
             Palette::Obsidian => "Black glass and violet.",
             Palette::Aperture => "A laboratory's white panels and charcoal, with a portal of each colour: blue by day, orange by night.",
+            Palette::Cyberpunk => "Neon yellow and deep teal, with a green laser: teal on a yellow sky by day, yellow on the dark of the city by night.",
         }
     }
 
@@ -124,6 +130,7 @@ impl Palette {
             "gem" | "malachite" => Some(Palette::Gem),
             "obsidian" => Some(Palette::Obsidian),
             "aperture" | "aperture_science" => Some(Palette::Aperture),
+            "cyberpunk" => Some(Palette::Cyberpunk),
             _ => None,
         }
     }
@@ -134,6 +141,7 @@ impl Palette {
             Palette::Gem => &GEM,
             Palette::Obsidian => &OBSIDIAN,
             Palette::Aperture => &APERTURE,
+            Palette::Cyberpunk => &CYBERPUNK,
         };
         &schemes[usize::from(dark)]
     }
@@ -214,6 +222,29 @@ static APERTURE: Colors = [
         rgb(0x1a1c1e), rgb(0x222528), rgb(0x292d31), rgb(0x3a4046),
         clear(0x00a2ff, 72),
         rgb(0xff5c50), rgb(0xff9a1f), rgb(0xf2c94c), rgb(0x7ad468), rgb(0x4fd3de), rgb(0x27a7ff), rgb(0xb48df2), rgb(0xf48fb1), rgb(0x8b949c),
+    ],
+];
+
+/// The dark scheme is the city at night: deep teal, with the neon yellow of
+/// its signs for the accent and the green of a laser for the highlight. The
+/// light one is the yellow sky over it, pale enough to read on, with the
+/// city's teal for the accent, as yellow cannot be read on it. The rest are
+/// the city's lights: the red of a coat's lining, the orange of a tower,
+/// neon pink.
+static CYBERPUNK: Colors = [
+    [
+        rgb(0x00788a),
+        rgb(0x12292e), rgb(0x46636a), rgb(0x93a8a8),
+        rgb(0xfdfcef), rgb(0xf5f2d8), rgb(0xefecd0), rgb(0xd8d3a8),
+        clear(0xf5e600, 140),
+        rgb(0xd42a3a), rgb(0xd9621c), rgb(0xa89a00), rgb(0x1f9a4a), rgb(0x00808f), rgb(0x1f6fc0), rgb(0x7a4fd0), rgb(0xd0337f), rgb(0x7d9494),
+    ],
+    [
+        rgb(0xf5e600),
+        rgb(0xdfeee9), rgb(0x9ab8b6), rgb(0x557a7c),
+        rgb(0x0b2229), rgb(0x0f2b33), rgb(0x12323b), rgb(0x1f4a55),
+        clear(0x3dff7a, 60),
+        rgb(0xff4d5e), rgb(0xff8a4c), rgb(0xf5e600), rgb(0x5cff8a), rgb(0x4fe0e8), rgb(0x4aa8ff), rgb(0xb98cff), rgb(0xff5fa8), rgb(0x7f9ea0),
     ],
 ];
 
@@ -426,7 +457,7 @@ pub fn number(value: f32) -> String {
 }
 
 /// What the file says above the settings of the theme and of its scheme.
-const THEME_ABOUT: &str = "# The theme, which is the colours of everything: gem, obsidian or aperture.";
+const THEME_ABOUT: &str = "# The theme, which is the colours of everything: gem, obsidian, aperture or cyberpunk.";
 const SCHEME_ABOUT: &str = "# Which of a theme's two schemes, light or dark. `system` goes by what the system is set to.";
 
 /// What the file says above the colours of a scheme. The last of these lines
@@ -491,7 +522,8 @@ pub fn in_step(text: &str) -> String {
     if text.trim().is_empty() {
         return text.to_owned();
     }
-    let text = renamed(text);
+    // The line the app wrote above the theme before there was Cyberpunk.
+    let text = renamed(text).replace("# The theme, which is the colours of everything: gem, obsidian or aperture.", THEME_ABOUT);
     let (look, _) = Appearance::parse(&text);
     let text = conf::recomment(&text, |section, key, value| {
         let dark = COLORS.iter().position(|colors| *colors == section.replace("colours", "colors"))? == 1;
@@ -590,6 +622,8 @@ mod tests {
             }
         }
         assert_eq!(Palette::named("Aperture Science"), Some(Palette::Aperture));
+        let before_cyberpunk = template().replace(THEME_ABOUT, "# The theme, which is the colours of everything: gem, obsidian or aperture.");
+        assert_eq!(in_step(&before_cyberpunk), template(), "a file from before a theme was added is told of it");
         assert_eq!(Palette::named("sepia"), None);
     }
 
@@ -601,7 +635,7 @@ mod tests {
             problems,
             [
                 "Line 1: `stray` is not under a [section]",
-                "Line 3: `sepia` is not a theme: it is gem, obsidian or aperture",
+                "Line 3: `sepia` is not a theme: it is gem, obsidian, aperture or cyberpunk",
                 "Line 4: `big` is not a number",
                 "Line 5: there is no setting called `font`",
                 "Line 7: is not a setting (`name = value`)",
@@ -670,7 +704,7 @@ mod tests {
         let new = in_step(old);
         assert_eq!(
             new,
-            "# Mine.\n[appearance]\n# The theme, which is the colours of everything: gem, obsidian or aperture.\n# theme = gem\n# Which of a theme's two schemes, light or dark. `system` goes by what the system is set to.\nscheme = dark\n# The size of a note's text, in points.\n# text_size = 16\n\n# The colours of the dark scheme, as #RRGGBB. One that is set here is used in\n# place of the theme's own, whichever the theme.\n# The lines that are commented out show the Gem theme's.\n[colors.dark]\n# Behind the note\n# page = #101a16\n# Links\naccent = #3aa96f\n"
+            "# Mine.\n[appearance]\n# The theme, which is the colours of everything: gem, obsidian, aperture or cyberpunk.\n# theme = gem\n# Which of a theme's two schemes, light or dark. `system` goes by what the system is set to.\nscheme = dark\n# The size of a note's text, in points.\n# text_size = 16\n\n# The colours of the dark scheme, as #RRGGBB. One that is set here is used in\n# place of the theme's own, whichever the theme.\n# The lines that are commented out show the Gem theme's.\n[colors.dark]\n# Behind the note\n# page = #101a16\n# Links\naccent = #3aa96f\n"
         );
         assert_eq!(Appearance::parse(&new), (before, Vec::new()));
         assert_eq!(in_step(&new), new, "once is enough");

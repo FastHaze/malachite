@@ -184,10 +184,10 @@ fn folder_choice(ui: &mut egui::Ui, id: &str, current: &Path, folders: &[PathBuf
 /// How wide the dialog is and how tall its page of settings, where the
 /// window has the room; how wide its list of pages is; and how much of a
 /// setting's row is kept for what changes it.
-const WIDTH: f32 = 640.0;
+const WIDTH: f32 = 720.0;
 const HEIGHT: f32 = 420.0;
 const PAGES: f32 = 120.0;
-const CONTROLS: f32 = 210.0;
+const CONTROLS: f32 = 290.0;
 
 /// The room left at the right of the settings for the bar that scrolls them.
 const SCROLL_BAR: i8 = 14;
